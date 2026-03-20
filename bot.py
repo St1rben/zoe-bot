@@ -1,15 +1,18 @@
 import asyncio
 import os
 import re
-from pathlib import Path
 
-from dotenv import load_dotenv
-import aiohttp
 from aiohttp import web
+import aiohttp
 from aiogram import Bot
 from bs4 import BeautifulSoup
 
-load_dotenv(Path(__file__).parent / ".env")
+try:
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
