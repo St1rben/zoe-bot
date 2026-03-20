@@ -114,7 +114,11 @@ async def check_updates():
                 queue_is_present = queue_line is not None
 
                 if post_id != last_post_id:
-                    if last_post_id is not None:
+                    if last_post_id is None:
+                        # Первый запуск
+                        await bot.send_message(CHAT_ID, f"🟢 Бот запущено! Моніторинг черги {QUEUE} активний.")
+                        await send_post(title, text)
+                    else:
                         await send_post(title, text)
                     last_post_id = post_id
                     queue_was_present = queue_is_present if not no_schedule else False
