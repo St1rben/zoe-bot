@@ -5,6 +5,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 import aiohttp
+from aiohttp import web
 from aiogram import Bot
 from bs4 import BeautifulSoup
 
@@ -13,7 +14,7 @@ load_dotenv(Path(__file__).parent / ".env")
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 QUEUE = os.environ.get("QUEUE", "5.1")
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "120"))
 URL = "https://www.zoe.com.ua/outage/"
 
 bot = Bot(token=BOT_TOKEN)
@@ -37,7 +38,6 @@ def extract_first_post(html: str) -> tuple[str, str, str] | tuple[None, None, No
 
 
 def is_no_schedule(text: str) -> bool:
-    """Пост содержит сообщение что графиков нет вообще."""
     return "НЕ ЗАПЛАНОВАНІ" in text.upper() or "НЕ ПЛАНУЮТЬСЯ" in text.upper()
 
 
@@ -73,7 +73,6 @@ def format_queue_absent_msg(title: str, queue: str) -> str:
 
 
 async def send_post(title: str, text: str):
-    """Определяет тип поста и отправляет нужное сообщение."""
     if is_no_schedule(text):
         await bot.send_message(CHAT_ID, format_no_schedule_msg(title))
         print("[SENT] Графіки не заплановані")
@@ -111,14 +110,12 @@ async def check_updates():
                 queue_line = find_queue_line(text, QUEUE)
                 queue_is_present = queue_line is not None
 
-                # Новый пост
                 if post_id != last_post_id:
                     if last_post_id is not None:
                         await send_post(title, text)
                     last_post_id = post_id
                     queue_was_present = queue_is_present if not no_schedule else False
 
-                # Тот же пост — черга появилась или пропала
                 elif not no_schedule and queue_was_present != queue_is_present:
                     await send_post(title, text)
                     queue_was_present = queue_is_present
@@ -129,6 +126,25 @@ async def check_updates():
             await asyncio.sleep(CHECK_INTERVAL)
 
 
-if __name__ == "__main__":
+async def health(request):
+    return web.Response(text="OK")
+
+
+async def start_web():
+    app = web.Application()
+    app.router.add_get("/", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", 8080)
+    await site.start()
+    print("[WEB] Health server started on port 8080")
+
+
+async def main():
+    await start_web()
     print(f"[START] Моніторинг черги {QUEUE}, інтервал {CHECK_INTERVAL}s")
-    asyncio.run(check_updates())
+    await check_updates()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
