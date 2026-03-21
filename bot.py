@@ -4,6 +4,7 @@ import re
 import traceback
 
 import aiohttp
+from aiohttp import web
 from aiogram import Bot
 from bs4 import BeautifulSoup
 
@@ -18,6 +19,7 @@ BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 QUEUE = os.environ.get("QUEUE", "5.1")
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "120"))
+PORT = int(os.environ.get("PORT", "8080"))
 URL = "https://www.zoe.com.ua/outage/"
 
 bot = Bot(token=BOT_TOKEN)
@@ -127,9 +129,7 @@ async def check_updates():
                             CHAT_ID,
                             f"🟢 Бот запущено! Моніторинг черги {QUEUE} активний."
                         )
-                        await send_post(title, text)
-                    else:
-                        await send_post(title, text)
+                    await send_post(title, text)
 
                     last_post_id = post_id
                     queue_was_present = queue_is_present if not no_schedule else False
@@ -145,6 +145,28 @@ async def check_updates():
             await asyncio.sleep(CHECK_INTERVAL)
 
 
-if __name__ == "__main__":
+# --- Health server для Choreo ---
+async def health(request):
+    return web.Response(text="OK")
+
+async def start_web():
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    print(f"[WEB] Health server on port {PORT}")
+
+
+async def main():
     print(f"[START] Моніторинг черги {QUEUE}, інтервал {CHECK_INTERVAL}s")
-    asyncio.run(check_updates())
+    await asyncio.gather(
+        start_web(),
+        check_updates()
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
