@@ -3,7 +3,6 @@ import os
 import re
 import traceback
 
-from aiohttp import web
 import aiohttp
 from aiogram import Bot
 from bs4 import BeautifulSoup
@@ -99,12 +98,16 @@ async def check_updates():
         while True:
             try:
                 print("[DEBUG] Запит до сайту...")
-                async with session.get(URL, ssl=False, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    print(f"[DEBUG] Статус відповіді: {resp.status}")
+                async with session.get(
+                    URL,
+                    ssl=False,
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    print(f"[DEBUG] Статус: {resp.status}")
                     html = await resp.text()
 
                 post_id, title, text = extract_first_post(html)
-                print(f"[DEBUG] post_id={post_id} title={title[:40] if title else None}")
+                print(f"[DEBUG] post_id={post_id} | title={title[:50] if title else None}")
 
                 if not post_id:
                     print("[WARN] Пост не знайдено")
@@ -119,11 +122,15 @@ async def check_updates():
 
                 if post_id != last_post_id:
                     if last_post_id is None:
-                        print("[DEBUG] Перший запуск — відправляємо статус...")
-                        await bot.send_message(CHAT_ID, f"🟢 Бот запущено! Моніторинг черги {QUEUE} активний.")
+                        print("[DEBUG] Перший запуск...")
+                        await bot.send_message(
+                            CHAT_ID,
+                            f"🟢 Бот запущено! Моніторинг черги {QUEUE} активний."
+                        )
                         await send_post(title, text)
                     else:
                         await send_post(title, text)
+
                     last_post_id = post_id
                     queue_was_present = queue_is_present if not no_schedule else False
 
@@ -138,25 +145,6 @@ async def check_updates():
             await asyncio.sleep(CHECK_INTERVAL)
 
 
-async def health(request):
-    return web.Response(text="OK")
-
-
-async def start_web():
-    app = web.Application()
-    app.router.add_get("/", health)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8080)
-    await site.start()
-    print("[WEB] Health server started on port 8080")
-
-
-async def main():
-    await start_web()
-    print(f"[START] Моніторинг черги {QUEUE}, інтервал {CHECK_INTERVAL}s")
-    await check_updates()
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    print(f"[START] Моніторинг черги {QUEUE}, інтервал {CHECK_INTERVAL}s")
+    asyncio.run(check_updates())
