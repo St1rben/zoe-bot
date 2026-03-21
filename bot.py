@@ -18,7 +18,7 @@ except ImportError:
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 QUEUE = os.environ.get("QUEUE", "5.1")
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "120"))
+CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "60"))
 PORT = int(os.environ.get("PORT", "8080"))
 URL = "https://www.zoe.com.ua/outage/"
 
@@ -96,6 +96,24 @@ async def check_updates():
     global last_post_id, queue_was_present
     headers = {"User-Agent": "Mozilla/5.0 (ZOE-Bot/1.0)"}
 
+    # --- ТЕСТ МЕРЕЖІ ---
+    print("[NET TEST] Перевірка мережі...")
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get("https://httpbin.org/get", timeout=aiohttp.ClientTimeout(total=10)) as r:
+                print(f"[NET TEST] httpbin status: {r.status}")
+    except Exception as e:
+        print(f"[NET TEST FAIL] httpbin: {e}")
+
+    try:
+        async with aiohttp.ClientSession(headers=headers) as s:
+            async with s.get(URL, ssl=False, timeout=aiohttp.ClientTimeout(total=10, connect=5)) as r:
+                print(f"[ZOE TEST] status: {r.status}")
+    except Exception as e:
+        print(f"[ZOE TEST FAIL] {e}")
+        print(traceback.format_exc())
+
+    # --- ОСНОВНИЙ ЦИКЛ ---
     async with aiohttp.ClientSession(headers=headers) as session:
         while True:
             try:
@@ -145,7 +163,6 @@ async def check_updates():
             await asyncio.sleep(CHECK_INTERVAL)
 
 
-# --- Health server для Choreo ---
 async def health(request):
     return web.Response(text="OK")
 
