@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import traceback
 
 from aiohttp import web
 import aiohttp
@@ -97,10 +98,13 @@ async def check_updates():
     async with aiohttp.ClientSession(headers=headers) as session:
         while True:
             try:
+                print("[DEBUG] Запит до сайту...")
                 async with session.get(URL, ssl=False, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    print(f"[DEBUG] Статус відповіді: {resp.status}")
                     html = await resp.text()
 
                 post_id, title, text = extract_first_post(html)
+                print(f"[DEBUG] post_id={post_id} title={title[:40] if title else None}")
 
                 if not post_id:
                     print("[WARN] Пост не знайдено")
@@ -115,7 +119,7 @@ async def check_updates():
 
                 if post_id != last_post_id:
                     if last_post_id is None:
-                        # Первый запуск
+                        print("[DEBUG] Перший запуск — відправляємо статус...")
                         await bot.send_message(CHAT_ID, f"🟢 Бот запущено! Моніторинг черги {QUEUE} активний.")
                         await send_post(title, text)
                     else:
@@ -129,6 +133,7 @@ async def check_updates():
 
             except Exception as e:
                 print(f"[ERROR] {e}")
+                print(traceback.format_exc())
 
             await asyncio.sleep(CHECK_INTERVAL)
 
