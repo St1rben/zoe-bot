@@ -1,0 +1,147 @@
+import { env } from "cloudflare:workers";
+import { reset } from "cloudflare:test";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runCheck, sendDigestIfDue, timeInZone } from "../src/monitor";
+import { isBusinessPost, parsePage, type OutagePost } from "../src/parser";
+import { setChatQueue } from "../src/state";
+import {
+  BUSINESS_ARTICLE_HTML,
+  MIXED_PAGE_HTML,
+  SAMPLE_HTML_UPDATED,
+} from "./fixtures";
+import { installNetworkStub } from "./helpers";
+
+const CHAT_ID = 111;
+
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await reset();
+});
+
+async function firstConsumerPostOrThrow(html: string): Promise<OutagePost> {
+  const posts = await parsePage(html);
+  const post = posts.find((candidate) => !isBusinessPost(candidate));
+  if (post === undefined) throw new Error("немає поста для населення");
+  return post;
+}
+
+function digestEnv(overrides: { digestTime: string; timeZone: string }): Env {
+  return {
+    STATE: env.STATE,
+    BOT_TOKEN: "test-token",
+    QUEUE: "5.1",
+    DIGEST_TIME: overrides.digestTime,
+    DIGEST_TZ: overrides.timeZone,
+    DRY_RUN: "0",
+  } as unknown as Env;
+}
+
+describe("runCheck", () => {
+  it("перший запуск: вітання + оновлення, повторний — без дублів", async () => {
+    const net = installNetworkStub({ page: MIXED_PAGE_HTML });
+    await setChatQueue(env, CHAT_ID, null);
+
+    const first = await runCheck(env);
+    expect(first.ok).toBe(true);
+    expect(first.postId).toBe("post-1234");
+    expect(first.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls).toHaveLength(2);
+
+    const startup = net.telegramCalls[0]!;
+    const update = net.telegramCalls[1]!;
+    expect(startup.chatId).toBe(CHAT_ID);
+    expect(startup.text).toContain("Бот запущено");
+    expect(update.text).toContain("Графік відключень на 17 жовтня");
+    expect(update.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
+    expect(update.text).toContain("zoe.com.ua");
+
+    const second = await runCheck(env);
+    expect(second.sentTo).toEqual([]);
+    expect(net.telegramCalls).toHaveLength(2);
+  });
+
+  it("оновлення часу того самого поста надсилається ще раз", async () => {
+    const page = { html: MIXED_PAGE_HTML };
+    const net = installNetworkStub({ page: () => page.html });
+    await setChatQueue(env, CHAT_ID, null);
+    await runCheck(env);
+    expect(net.telegramCalls).toHaveLength(2);
+
+    page.html = SAMPLE_HTML_UPDATED;
+    const summary = await runCheck(env);
+    expect(summary.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls).toHaveLength(3);
+    expect(net.telegramCalls[2]!.text).toContain("5.1: 12:00 - 14:00");
+  });
+
+  it("зміна черги чату одразу дає повідомлення для нової черги", async () => {
+    const net = installNetworkStub({ page: MIXED_PAGE_HTML });
+    await setChatQueue(env, CHAT_ID, null);
+    await runCheck(env);
+
+    await setChatQueue(env, CHAT_ID, "5.2");
+    const summary = await runCheck(env);
+    expect(summary.sentTo).toEqual([CHAT_ID]);
+    const last = net.telegramCalls.at(-1)!;
+    expect(last.text).toContain("Черга 5.2: 10:00 - 12:00");
+  });
+
+  it("бізнес-пости повністю ігноруються", async () => {
+    const net = installNetworkStub({ page: BUSINESS_ARTICLE_HTML });
+    await setChatQueue(env, CHAT_ID, null);
+
+    const summary = await runCheck(env);
+    expect(summary.skipped).toBe("no_consumer_post");
+    expect(net.telegramCalls).toHaveLength(0);
+  });
+
+  it("HTTP-помилка сторінки кидає помилку, щоб cron повторив", async () => {
+    installNetworkStub({ page: "boom", pageStatus: 503 });
+    await expect(runCheck(env)).rejects.toThrow("HTTP 503");
+  });
+});
+
+describe("sendDigestIfDue", () => {
+  it("надсилає у вказаний час один раз на день", async () => {
+    const net = installNetworkStub({ page: MIXED_PAGE_HTML });
+    await setChatQueue(env, CHAT_ID, null);
+    const post = await firstConsumerPostOrThrow(MIXED_PAGE_HTML);
+    const fake = digestEnv({ digestTime: "20:15", timeZone: "UTC" });
+
+    // не та хвилина — тиша
+    expect(await sendDigestIfDue(fake, post, new Date("2026-10-17T19:59:00Z"))).toBe(false);
+    expect(net.telegramCalls).toHaveLength(0);
+
+    // та сама хвилина — нагадування
+    expect(await sendDigestIfDue(fake, post, new Date("2026-10-17T20:15:30Z"))).toBe(true);
+    expect(net.telegramCalls).toHaveLength(1);
+    const digest = net.telegramCalls[0]!;
+    expect(digest.chatId).toBe(CHAT_ID);
+    expect(digest.text).toContain("Нагадування про графік");
+    expect(digest.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
+
+    // вдруге того ж дня — тиша
+    expect(await sendDigestIfDue(fake, post, new Date("2026-10-17T20:15:45Z"))).toBe(false);
+    expect(net.telegramCalls).toHaveLength(1);
+
+    // наступний день — знову надсилає
+    expect(await sendDigestIfDue(fake, post, new Date("2026-10-18T20:15:05Z"))).toBe(true);
+    expect(net.telegramCalls).toHaveLength(2);
+  });
+});
+
+describe("timeInZone", () => {
+  it("UTC", () => {
+    expect(timeInZone(new Date("2026-10-17T21:30:00Z"), "UTC")).toEqual({
+      date: "2026-10-17",
+      hm: "21:30",
+    });
+  });
+
+  it("Europe/Kyiv: літній час (UTC+3) і перехід через північ", () => {
+    expect(timeInZone(new Date("2026-10-17T21:30:00Z"), "Europe/Kyiv")).toEqual({
+      date: "2026-10-18",
+      hm: "00:30",
+    });
+  });
+});

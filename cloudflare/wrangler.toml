@@ -1,0 +1,22 @@
+name = "zoe-outage-bot"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# Перевірка сторінки кожну хвилину (free-план дозволяє cron від 1 хвилини)
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+QUEUE = "5.1"
+DIGEST_TIME = ""
+DIGEST_TZ = "Europe/Kyiv"
+DRY_RUN = "0"
+
+# Створіть namespace: npx wrangler kv namespace create STATE
+# і вставте отриманий id (або залиште як є для локальної розробки).
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[observability]
+enabled = true

@@ -1,0 +1,78 @@
+/** Обробка команд із Telegram-вебхука: /start, /help, /queue, /status. */
+
+import {
+  formatHelp,
+  formatQueueCurrent,
+  formatQueueInvalid,
+  formatQueueSet,
+  formatStatus,
+  formatWelcome,
+} from "./messages";
+import type { Scenario } from "./parser";
+import { ensureChat, getChatQueue, getChatState, getMeta, setChatQueue } from "./state";
+import { sendMessage, type TelegramUpdate } from "./telegram";
+
+const QUEUE_RE = /^\d+(?:\.\d+)?$/;
+const COMMAND_RE = /^\/(\w+)(?:@\S+)?(?:\s+(.*))?$/s;
+
+export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<void> {
+  const message = update.message;
+  const text = message?.text?.trim();
+  if (message === undefined || !text) return;
+
+  const match = COMMAND_RE.exec(text);
+  if (match === null) return;
+  const command = (match[1] ?? "").toLowerCase();
+  const argument = (match[2] ?? "").trim();
+  const chatId = message.chat.id;
+
+  switch (command) {
+    case "start": {
+      await ensureChat(env, chatId);
+      const queue = (await getChatQueue(env, chatId)) ?? env.QUEUE;
+      await sendMessage(env, chatId, formatWelcome(queue));
+      break;
+    }
+    case "help":
+      await sendMessage(env, chatId, formatHelp());
+      break;
+    case "queue":
+      await handleQueue(env, chatId, argument);
+      break;
+    case "status":
+      await handleStatus(env, chatId);
+      break;
+    default:
+      break;
+  }
+}
+
+async function handleQueue(env: Env, chatId: number, argument: string): Promise<void> {
+  if (argument === "") {
+    const customQueue = await getChatQueue(env, chatId);
+    await sendMessage(env, chatId, formatQueueCurrent(customQueue ?? env.QUEUE, customQueue === null));
+    return;
+  }
+  if (!QUEUE_RE.test(argument)) {
+    await sendMessage(env, chatId, formatQueueInvalid(argument));
+    return;
+  }
+  await setChatQueue(env, chatId, argument);
+  await sendMessage(env, chatId, formatQueueSet(argument));
+}
+
+async function handleStatus(env: Env, chatId: number): Promise<void> {
+  const queue = (await getChatQueue(env, chatId)) ?? env.QUEUE;
+  const meta = await getMeta(env);
+  const chatState = await getChatState(env, chatId);
+  const fresh = chatState !== null && chatState.postId === meta.lastPostId && chatState.queue === queue;
+  const scenario: Scenario | null = fresh
+    ? { kind: chatState.scenario, times: chatState.times }
+    : null;
+
+  await sendMessage(
+    env,
+    chatId,
+    formatStatus({ queue, title: meta.lastPostTitle, scenario, updatedAt: meta.updatedAt }),
+  );
+}

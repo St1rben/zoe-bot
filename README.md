@@ -121,6 +121,34 @@ docker run --env-file .env -p 8080:8080 zoe-bot
 # або: docker compose up -d
 ```
 
+## Cloudflare Workers (безкоштовно, без картки)
+
+Та сама логіка працює як один воркер: вебхук команд + cron-перевірка
+щохвилини, стан у Workers KV. Free-тариф, картка не потрібна; лімітів
+(100 тис. KV-читань/добу проти ~15 тис. фактичних) вистачає з запасом.
+
+Деталі — у [`cloudflare/README.md`](cloudflare/README.md), коротко:
+
+```bash
+cd cloudflare
+npm install
+npx wrangler login                      # відкриє браузер
+npx wrangler kv namespace create STATE  # вставте id у wrangler.toml
+npx wrangler secret put BOT_TOKEN
+npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
+npx wrangler deploy
+
+# реєстрація вебхука (підставте свій URL)
+WORKER_URL=https://zoe-outage-bot.<account>.workers.dev \
+BOT_TOKEN=<токен> TELEGRAM_WEBHOOK_SECRET=<секрет> npm run set-webhook
+```
+
+Нюанс: zoe.com.ua віддає неповний ланцюжок TLS-сертифікатів. Бойовий edge
+Cloudflare такі сервери обслуговує (`fetch()` працює), а локальний
+`wrangler dev` — ні, тому живу перевірку робіть через `wrangler dev --remote`
+або вже після деплою. Python-версія лишається «планом Б»: у неї є fallback
+без перевірки TLS.
+
 ## Примітки
 
 - `zoe.com.ua` іноді віддає неповний ланцюжок TLS-сертифікатів. Бот спершу

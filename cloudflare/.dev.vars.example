@@ -1,0 +1,5 @@
+# Локальні змінні для `wrangler dev` — скопіюйте у .dev.vars та підлаштуйте.
+# `.dev.vars` у .gitignore, у репозиторій потрапляє лише цей приклад.
+DRY_RUN=1
+BOT_TOKEN=dummy-local-token
+TELEGRAM_WEBHOOK_SECRET=dev-secret
