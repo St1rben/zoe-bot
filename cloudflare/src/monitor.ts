@@ -1,6 +1,7 @@
 /**
- * Цикл перевірки (запускається cron-ом щохвилини):
- * завантажити сторінку → спарсити → порівняти зі станом у KV → надіслати зміни.
+ * Цикл перевірки: отримати сторінку (cron-ом із Cloudflare або через /ingest,
+ * який штовхає маячок з українського хостингу) → спарсити → порівняти зі
+ * станом у KV → надіслати зміни.
  */
 
 import { formatDigest, formatStartup, formatUpdate } from "./messages";
@@ -22,8 +23,12 @@ export interface CheckSummary {
   skipped?: string;
 }
 
+export type CheckSource = "cron" | "ingest";
+
 const USER_AGENT = "ZoeOutageBot-Worker/1.0 (+https://github.com/St1rben/zoe-bot)";
 const FETCH_TIMEOUT_MS = 15_000;
+/** Як часто оновлювати meta.lastIngestAt, щоб не палити write-ліміт KV. */
+const INGEST_HEARTBEAT_MS = 30 * 60 * 1000;
 
 export async function fetchPage(url: string = OUTAGE_URL): Promise<string> {
   const response = await fetch(url, {
@@ -55,6 +60,25 @@ export function timeInZone(date: Date, timeZone: string): { date: string; hm: st
 
 export async function runCheck(env: Env): Promise<CheckSummary> {
   const html = await fetchPage();
+  return await processHtml(env, html, "cron");
+}
+
+/** SHA-256 (hex) від id + заголовка + тексту поста — «відбиток» контенту. */
+export async function contentSignature(post: OutagePost): Promise<string> {
+  const bytes = new TextEncoder().encode(`${post.id}\n${post.title}\n${post.text}`);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Обробка вже завантаженої сторінки: джерело — cron (fetch із Cloudflare)
+ * або /ingest (HTML, який приніс маячок із українського хостингу).
+ */
+export async function processHtml(
+  env: Env,
+  html: string,
+  source: CheckSource = "cron",
+): Promise<CheckSummary> {
   const posts = await parsePage(html);
   const post = posts.find((candidate) => !isBusinessPost(candidate));
   if (post === undefined) {
@@ -62,7 +86,25 @@ export async function runCheck(env: Env): Promise<CheckSummary> {
     return { ok: true, sentTo: [], skipped: "no_consumer_post" };
   }
 
+  const now = Date.now();
   let meta = await getMeta(env);
+  let metaDirty = false;
+
+  // Мітка живості маячка: пишемо не частіше ніж раз на 30 хв (KV: 1 тис. записів/добу)
+  const lastIngestAt = meta.lastIngestAt ?? null;
+  if (source === "ingest" && (lastIngestAt === null || now - lastIngestAt > INGEST_HEARTBEAT_MS)) {
+    meta.lastIngestAt = now;
+    metaDirty = true;
+  }
+
+  const signature = await contentSignature(post);
+  if (meta.lastPostId !== null && meta.lastPostSig === signature) {
+    // Пост не змінювався — не перебираємо чати, лише дайджест і «бейкон» маячка.
+    const digestSent = await sendDigestIfDue(env, post, new Date(now), meta);
+    if (metaDirty && !digestSent) await putMeta(env, meta);
+    return { ok: true, postId: post.id, title: post.title, sentTo: [], skipped: "unchanged" };
+  }
+
   const chats = await listChats(env);
   const sentTo: number[] = [];
 
@@ -99,12 +141,18 @@ export async function runCheck(env: Env): Promise<CheckSummary> {
     }
   }
 
-  if (meta.lastPostId !== post.id) {
-    meta = { ...meta, lastPostId: post.id, lastPostTitle: post.title, updatedAt: Date.now() };
-    await putMeta(env, meta);
-  }
+  // Контент змінився — фіксуємо метадані (навіть якщо postId той самий: правки в тому ж пості).
+  meta = {
+    ...meta,
+    lastPostId: post.id,
+    lastPostTitle: post.title,
+    lastPostText: post.text,
+    updatedAt: now,
+    lastPostSig: signature,
+  };
+  const digestSent = await sendDigestIfDue(env, post, new Date(now), meta);
+  if (!digestSent) await putMeta(env, meta);
 
-  await sendDigestIfDue(env, post, new Date(), meta);
   return { ok: true, postId: post.id, title: post.title, sentTo };
 }
 

@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCheck, sendDigestIfDue, timeInZone } from "../src/monitor";
@@ -74,16 +74,27 @@ describe("runCheck", () => {
     expect(net.telegramCalls[2]!.text).toContain("5.1: 12:00 - 14:00");
   });
 
-  it("зміна черги чату одразу дає повідомлення для нової черги", async () => {
+  it("зміна черги чату: /queue одразу надсилає графік нової черги", async () => {
     const net = installNetworkStub({ page: MIXED_PAGE_HTML });
     await setChatQueue(env, CHAT_ID, null);
     await runCheck(env);
+    expect(net.telegramCalls).toHaveLength(2);
 
-    await setChatQueue(env, CHAT_ID, "5.2");
-    const summary = await runCheck(env);
-    expect(summary.sentTo).toEqual([CHAT_ID]);
-    const last = net.telegramCalls.at(-1)!;
-    expect(last.text).toContain("Черга 5.2: 10:00 - 12:00");
+    const response = await exports.default.fetch("https://bot.example/telegram", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "test-secret",
+      },
+      body: JSON.stringify({
+        update_id: 3,
+        message: { message_id: 3, chat: { id: CHAT_ID, type: "private" }, text: "/queue 5.2" },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(net.telegramCalls).toHaveLength(4);
+    expect(net.telegramCalls[2]!.text).toContain("Чергу змінено на <b>5.2</b>");
+    expect(net.telegramCalls[3]!.text).toContain("Черга 5.2: 10:00 - 12:00");
   });
 
   it("бізнес-пости повністю ігноруються", async () => {

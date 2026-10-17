@@ -10,13 +10,13 @@ crons = ["* * * * *"]
 QUEUE = "5.1"
 DIGEST_TIME = ""
 DIGEST_TZ = "Europe/Kyiv"
-DRY_RUN = "0"
+DRY_RUN = "1"
 
 # Створіть namespace: npx wrangler kv namespace create STATE
 # і вставте отриманий id (або залиште як є для локальної розробки).
 [[kv_namespaces]]
 binding = "STATE"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "adcfb16056344082999dc88711b57c8e"
 
 [observability]
 enabled = true

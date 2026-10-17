@@ -6,10 +6,19 @@ import {
   formatQueueInvalid,
   formatQueueSet,
   formatStatus,
+  formatUpdate,
   formatWelcome,
 } from "./messages";
-import type { Scenario } from "./parser";
-import { ensureChat, getChatQueue, getChatState, getMeta, setChatQueue } from "./state";
+import { scenarioFor, type Scenario } from "./parser";
+import {
+  ensureChat,
+  getChatQueue,
+  getChatState,
+  getMeta,
+  postFromMeta,
+  putChatState,
+  setChatQueue,
+} from "./state";
 import { sendMessage, type TelegramUpdate } from "./telegram";
 
 const QUEUE_RE = /^\d+(?:\.\d+)?$/;
@@ -31,6 +40,8 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<vo
       await ensureChat(env, chatId);
       const queue = (await getChatQueue(env, chatId)) ?? env.QUEUE;
       await sendMessage(env, chatId, formatWelcome(queue));
+      // Якщо останній пост уже відомий — одразу показуємо актуальний графік.
+      await sendCurrentSchedule(env, chatId, queue);
       break;
     }
     case "help":
@@ -59,6 +70,24 @@ async function handleQueue(env: Env, chatId: number, argument: string): Promise<
   }
   await setChatQueue(env, chatId, argument);
   await sendMessage(env, chatId, formatQueueSet(argument));
+  // Одразу показуємо графік для нової черги, якщо останній пост відомий.
+  await sendCurrentSchedule(env, chatId, argument);
+}
+
+/** Надсилає поточний графік черги з meta і фіксує стан чату (дедуплікація). */
+async function sendCurrentSchedule(env: Env, chatId: number, queue: string): Promise<void> {
+  const post = postFromMeta(await getMeta(env));
+  if (post === null) return;
+  const scenario = scenarioFor(post, queue);
+  if (await sendMessage(env, chatId, formatUpdate(post.title, queue, scenario))) {
+    await putChatState(env, chatId, {
+      postId: post.id,
+      queue,
+      scenario: scenario.kind,
+      times: scenario.times,
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 async function handleStatus(env: Env, chatId: number): Promise<void> {

@@ -10,6 +10,7 @@ export default defineConfig({
         bindings: {
           BOT_TOKEN: "test-token",
           TELEGRAM_WEBHOOK_SECRET: "test-secret",
+          INGEST_TOKEN: "test-ingest-token",
           QUEUE: "5.1",
           DIGEST_TIME: "",
           DIGEST_TZ: "Europe/Kyiv",

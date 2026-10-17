@@ -2,12 +2,13 @@
  * ZOE Outage Bot — Cloudflare Worker.
  *
  *   POST /telegram  — вебхук Telegram (команди /start /help /queue /status)
+ *   POST /ingest    — HTML сторінки від маячка на українському хостингу
  *   GET  /health    — стан воркера (JSON)
- *   cron * * * * * — щохвилинна перевірка zoe.com.ua/outage
+ *   cron * * * * * — щохвилинна перевірка zoe.com.ua/outage (коли сайт доступний із CF)
  */
 
 import { handleUpdate } from "./commands";
-import { runCheck } from "./monitor";
+import { processHtml, runCheck } from "./monitor";
 import { getMeta } from "./state";
 import type { TelegramUpdate } from "./telegram";
 import { VERSION } from "./version";
@@ -36,6 +37,11 @@ export default {
       return Response.json({ ok: true });
     }
 
+    if (url.pathname === "/ingest") {
+      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+      return await ingestResponse(env, request);
+    }
+
     if (url.pathname === "/" || url.pathname === "/health") {
       return await healthResponse(env);
     }
@@ -52,6 +58,33 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+/** Межі тіла /ingest: жива сторінка zoe ~120 КБ; менше 512 Б — явно не сторінка. */
+const MIN_INGEST_BYTES = 512;
+const MAX_INGEST_BYTES = 2_000_000;
+
+async function ingestResponse(env: Env, request: Request): Promise<Response> {
+  const secret = env.INGEST_TOKEN;
+  if (secret === undefined || secret === "") {
+    return new Response("Ingest is not configured", { status: 503 });
+  }
+  const provided = request.headers.get("x-ingest-token") ?? "";
+  if (!constantTimeEqual(secret, provided)) return new Response("Forbidden", { status: 403 });
+
+  const html = await request.text();
+  if (html.length < MIN_INGEST_BYTES || html.length > MAX_INGEST_BYTES) {
+    return Response.json({ ok: false, error: "bad_body", length: html.length }, { status: 400 });
+  }
+
+  try {
+    const summary = await processHtml(env, html, "ingest");
+    console.log("ingest:", JSON.stringify(summary));
+    return Response.json(summary);
+  } catch (error) {
+    console.error("ingest failed:", error);
+    return Response.json({ ok: false, error: String(error) }, { status: 500 });
+  }
+}
 
 function isAuthorizedWebhook(env: Env, request: Request): boolean {
   const secret = env.TELEGRAM_WEBHOOK_SECRET;
@@ -78,6 +111,7 @@ async function healthResponse(env: Env): Promise<Response> {
       lastPostId: meta.lastPostId,
       lastPostTitle: meta.lastPostTitle,
       updatedAt: meta.updatedAt,
+      lastIngestAt: meta.lastIngestAt ?? null,
       now: new Date().toISOString(),
     });
   } catch (error) {

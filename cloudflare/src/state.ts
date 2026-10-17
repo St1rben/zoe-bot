@@ -5,7 +5,7 @@
  *   meta             → глобальні метадані: останній пост, дата дайджесту
  */
 
-import type { ScenarioKind } from "./parser";
+import { parseQueueLines, type OutagePost, type ScenarioKind } from "./parser";
 
 export const CHAT_PREFIX = "chat:";
 export const CHAT_STATE_PREFIX = "chat_state:";
@@ -28,12 +28,37 @@ export interface ChatState {
 export interface Meta {
   lastPostId: string | null;
   lastPostTitle: string | null;
+  /** Текст останнього поста — щоб /start міг показати графік без повторного HTML. */
+  lastPostText: string | null;
   updatedAt: number | null;
   digestDate: string | null;
+  /** SHA-256 контенту останнього поста — пропуск незмінних перевірок. */
+  lastPostSig: string | null;
+  /** Час останнього прийнятого /ingest (оновлюється не частіше ніж раз на 30 хв). */
+  lastIngestAt: number | null;
 }
 
 export function emptyMeta(): Meta {
-  return { lastPostId: null, lastPostTitle: null, updatedAt: null, digestDate: null };
+  return {
+    lastPostId: null,
+    lastPostTitle: null,
+    lastPostText: null,
+    updatedAt: null,
+    digestDate: null,
+    lastPostSig: null,
+    lastIngestAt: null,
+  };
+}
+
+/** Відновлює останній пост із метаданих (без повторного fetch/parse HTML). */
+export function postFromMeta(meta: Meta): OutagePost | null {
+  if (meta.lastPostId === null || !meta.lastPostText) return null;
+  return {
+    id: meta.lastPostId,
+    title: meta.lastPostTitle ?? "",
+    text: meta.lastPostText,
+    queues: parseQueueLines(meta.lastPostText),
+  };
 }
 
 export async function getMeta(env: Env): Promise<Meta> {
