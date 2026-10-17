@@ -116,7 +116,7 @@ class Monitor:
 
         post = extract_post(html)
         if post is None:
-            logger.warning("На сторінці не знайдено жодного поста з id")
+            logger.warning("Немає поста для населення (усе — бізнес-пости або статей немає)")
             return
 
         self.last_post_id = post.post_id

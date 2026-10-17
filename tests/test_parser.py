@@ -6,12 +6,14 @@ from zoe_bot.parser import (
     SCENARIO_ABSENT,
     SCENARIO_NO_SCHEDULE,
     SCENARIO_PRESENT,
+    OutagePost,
     extract_post,
+    extract_posts,
     parse_queue_lines,
     scenario_for,
 )
 
-from .conftest import NO_ARTICLE_HTML
+from .conftest import BUSINESS_ARTICLE_HTML, NO_ARTICLE_HTML
 
 
 def test_extract_post_fields(sample_html: str) -> None:
@@ -39,6 +41,40 @@ def test_extract_post_without_article() -> None:
 def test_extract_post_without_id() -> None:
     html = '<article><h2>Без id</h2><div class="content">5.1: 08:00 - 10:00</div></article>'
     assert extract_post(html) is None
+
+
+def test_extract_post_skips_business_post(mixed_page_html: str) -> None:
+    post = extract_post(mixed_page_html)
+    assert post is not None
+    assert post.post_id == "post-1234"
+
+
+def test_extract_posts_returns_all_with_ids(mixed_page_html: str) -> None:
+    posts = extract_posts(mixed_page_html)
+    assert [post.post_id for post in posts] == ["post-2000", "post-1234"]
+
+
+def test_all_business_posts_give_none() -> None:
+    html = f"<html><body>{BUSINESS_ARTICLE_HTML}</body></html>"
+    assert extract_post(html) is None
+
+
+def test_for_business_by_title() -> None:
+    post = OutagePost(post_id="1", title="ДО УВАГИ ПРОМИСЛОВОСТІ ТА БІЗНЕСУ", text="без маркерів")
+    assert post.for_business is True
+
+
+def test_for_business_by_text() -> None:
+    post = OutagePost(
+        post_id="1", title="Графік на 18 жовтня", text="Дані обмеження НЕ СТОСУЮТЬСЯ НАСЕЛЕННЯ."
+    )
+    assert post.for_business is True
+
+
+def test_consumer_post_is_not_business(sample_html: str) -> None:
+    post = extract_post(sample_html)
+    assert post is not None
+    assert post.for_business is False
 
 
 def test_no_schedule_marker(no_schedule_html: str) -> None:
