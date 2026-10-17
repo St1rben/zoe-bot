@@ -73,6 +73,21 @@ describe("parsePage", () => {
     const html = MIXED_PAGE_HTML.slice(0, MIXED_PAGE_HTML.indexOf('<article id="post-1234"'));
     expect(await consumerPost(html)).toBeNull();
   });
+
+  it("реальна розмітка zoe: <br /> та тире – не ламають парсинг", async () => {
+    const html = `
+<article id="post-3000">
+  <h2>ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ</h2>
+  <div class="content">
+    <p>За терміновою вказівкою НЕК «Укренерго» оновлено графіки.<br />
+1.1: 10:30 – 13:30<br />
+5.1: 16:30 – 20:30</p>
+  </div>
+</article>`;
+    const post = await consumerPostOrThrow(html);
+    expect(post.text).toContain("За терміновою вказівкою НЕК «Укренерго»");
+    expect(post.queues).toEqual({ "1.1": "10:30 - 13:30", "5.1": "16:30 - 20:30" });
+  });
 });
 
 describe("isBusinessPost", () => {
@@ -126,6 +141,12 @@ describe("parseQueueLines", () => {
 
   it("ігнорує рядки без точного формату «номер: час»", () => {
     expect(parseQueueLines("Черга 5.1: 08:00 - 10:00\nДякуємо")).toEqual({});
+  });
+
+  it("нормалізує тире – та — у звичайний дефіс", () => {
+    expect(parseQueueLines("5.1: 08:00 – 10:00, 16:00 — 20:00")).toEqual({
+      "5.1": "08:00 - 10:00, 16:00 - 20:00",
+    });
   });
 });
 

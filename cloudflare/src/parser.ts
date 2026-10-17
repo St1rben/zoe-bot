@@ -55,7 +55,11 @@ export function parseQueueLines(text: string): Record<string, string> {
     const match = QUEUE_LINE_RE.exec(rawLine.trim());
     if (match === null) continue;
     const queue = match[1] as string;
-    const times = (match[2] as string).replace(/\s+/g, " ").trim();
+    // На реальній сторінці трапляються тире – (U+2013) та — (U+2014): уніфікуємо
+    const times = (match[2] as string)
+      .replace(/\s+/g, " ")
+      .replace(/[–—]/g, "-")
+      .trim();
     if (!(queue in queues)) queues[queue] = times;
   }
   return queues;
@@ -123,10 +127,11 @@ export async function parsePage(html: string): Promise<OutagePost[]> {
         if (state.current !== null && state.contentDepth > 0) state.current.text += chunk.text;
       },
     })
+    // NB: <br> — void-елемент без кінцевого тега; onEndTag на ньому змушує
+    // HTMLRewriter падати («Parser error: No end tag»), тому новий рядок додаємо
+    // одразу при відкритті тега (після normalizeText результат той самий).
     .on("br", {
-      element(el) {
-        el.onEndTag(whenInContent((current) => (current.text += "\n")));
-      },
+      element: whenInContent((current) => (current.text += "\n")),
     })
     .on("p", {
       element(el) {
