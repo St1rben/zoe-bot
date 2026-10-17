@@ -1,4 +1,7 @@
+# Runtime-залежності. Мають збігатися з [project] dependencies у pyproject.toml.
 aiogram==3.18.0
 aiohttp==3.11.11
 beautifulsoup4==4.12.3
 lxml==5.3.0
+pydantic-settings==2.16.0
+tzdata==2026.5
