@@ -21,7 +21,7 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    timeout-minutes: 12
     env:
       WORKER_URL: "https://zoe-outage-bot.kir245314.workers.dev"
       SOURCE_URL: "https://www.zoe.com.ua/outage/"
@@ -48,7 +48,9 @@ jobs:
           if [ -f /usr/share/tor/geoip ]; then ARGS+=(--GeoIPFile /usr/share/tor/geoip); fi
           if [ -f /usr/share/tor/geoip6 ]; then ARGS+=(--GeoIPv6File /usr/share/tor/geoip6); fi
           tor "${ARGS[@]}" &
-          for i in $(seq 1 60); do
+          # Іноді bootstrap через Tor із суворим українським виходом триває
+          # довше двох хвилин (буває застрягає на 50%) — чекаємо до 5 хв.
+          for i in $(seq 1 150); do
             if grep -q "Bootstrapped 100%" "$TOR_LOG" 2>/dev/null; then break; fi
             sleep 2
           done
