@@ -1,0 +1,32 @@
+name: keepalive
+
+# GitHub вимикає запуски за розписом (schedule), якщо в репозиторії 60 днів
+# не було активності. Раз на місяць додаємо крихітний коміт, щоб zoe-fetch
+# продовжував працювати без участі людини.
+
+on:
+  schedule:
+    - cron: "23 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: false
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Зробити коміт-серцебиття
+        run: |
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "chore: keepalive [skip ci]"
+          git push

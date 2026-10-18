@@ -1,0 +1,86 @@
+name: zoe-fetch
+
+# «Очі» бота: раз на ~5 хвилин завантажує www.zoe.com.ua/outage/ через Tor
+# з українським виходом (сайт відповідає лише українським мережам) і віддає
+# готовий HTML у Cloudflare-воркер (POST /ingest), який робить дедуп і розсилку.
+#
+# Потрібен секрет репозиторію INGEST_TOKEN (Settings → Secrets and variables → Actions).
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zoe-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      WORKER_URL: "https://zoe-outage-bot.kir245314.workers.dev"
+      SOURCE_URL: "https://www.zoe.com.ua/outage/"
+      BROWSER_UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+    steps:
+      - name: Встановити tor
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tor
+
+      - name: Підняти tor з українським виходом
+        run: |
+          TOR_LOG="$RUNNER_TEMP/tor.log"
+          TOR_DATA="$RUNNER_TEMP/tor-data"
+          mkdir -p "$TOR_DATA"
+          chmod 700 "$TOR_DATA"
+          ARGS=(--SocksPort 9050 --ExitNodes "{ua}" --StrictNodes 1 --DataDirectory "$TOR_DATA" --Log "notice file $TOR_LOG")
+          if [ -f /usr/share/tor/geoip ]; then ARGS+=(--GeoIPFile /usr/share/tor/geoip); fi
+          if [ -f /usr/share/tor/geoip6 ]; then ARGS+=(--GeoIPv6File /usr/share/tor/geoip6); fi
+          tor "${ARGS[@]}" &
+          for i in $(seq 1 60); do
+            if grep -q "Bootstrapped 100%" "$TOR_LOG" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          if ! grep -q "Bootstrapped 100%" "$TOR_LOG" 2>/dev/null; then
+            echo "::error::tor не зміг піднятися"
+            tail -n 40 "$TOR_LOG" || true
+            exit 1
+          fi
+
+      - name: Завантажити сторінку через tor
+        run: |
+          PAGE_FILE="$RUNNER_TEMP/page.html"
+          curl -sS -m 30 --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org?format=json" > "$RUNNER_TEMP/exit-ip.json" 2>/dev/null || true
+          echo "exit ip: $(cat "$RUNNER_TEMP/exit-ip.json" 2>/dev/null || echo '?')"
+          ok=0
+          for attempt in 1 2; do
+            curl -sS -k -m 60 --socks5-hostname 127.0.0.1:9050 -A "$BROWSER_UA" \
+              -o "$PAGE_FILE" -w "attempt=$attempt http=%{http_code} size=%{size_download} time=%{time_total}s\n" \
+              "$SOURCE_URL" || true
+            size=$(wc -c < "$PAGE_FILE" 2>/dev/null || echo 0)
+            if [ "$size" -ge 20000 ]; then ok=1; break; fi
+            sleep 8
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "::error::не вдалося завантажити сторінку zoe через tor"
+            exit 1
+          fi
+
+      - name: Віддати HTML у воркер
+        env:
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: |
+          if [ -z "$INGEST_TOKEN" ]; then
+            echo "::error::секрет INGEST_TOKEN не налаштований"
+            exit 1
+          fi
+          curl -sS --fail-with-body -m 60 -X POST "$WORKER_URL/ingest" \
+            -H "X-Ingest-Token: $INGEST_TOKEN" \
+            -H "Content-Type: text/html; charset=utf-8" \
+            --data-binary @"$RUNNER_TEMP/page.html" \
+            -w "\nworker_http=%{http_code}\n"
