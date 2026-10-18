@@ -110,6 +110,7 @@ async function handleStatus(env: Env, chatId: number): Promise<void> {
       scenario,
       updatedAt: meta.updatedAt,
       staleNote,
+      checkedAt: meta.lastIngestAt,
     }),
   );
 }

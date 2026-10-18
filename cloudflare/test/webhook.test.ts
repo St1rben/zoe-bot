@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getChatQueue, listChats } from "../src/state";
+import { getChatQueue, listChats, emptyMeta, putMeta } from "../src/state";
 import { installNetworkStub } from "./helpers";
 
 const CHAT_ID = 555;
@@ -85,6 +85,13 @@ describe("webhook /telegram", () => {
     expect(net.telegramCalls.at(-1)!.text).toContain("Команди");
   });
 
+  it("/status показує, коли сайт востаннє перевіряли", async () => {
+    const net = installNetworkStub({ page: "" });
+    await putMeta(env, { ...emptyMeta(), lastIngestAt: Date.now() - 210_000 });
+    await sendUpdate("/status");
+    expect(net.telegramCalls.at(-1)!.text).toContain("Перевірено: 3 хв тому");
+  });
+
   it("некоректний JSON ігнорується без падіння", async () => {
     installNetworkStub({ page: "" });
     const response = await exports.default.fetch("https://bot.example/telegram", {
@@ -103,7 +110,7 @@ describe("health", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; version: string };
     expect(body.status).toBe("ok");
-    expect(body.version).toBe("1.3.0");
+    expect(body.version).toBe("1.4.0");
   });
 
   it("GET /telegram — 405", async () => {

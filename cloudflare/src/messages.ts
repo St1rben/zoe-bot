@@ -110,6 +110,8 @@ export function formatStatus(options: {
   updatedAt: number | null;
   /** Попередження, якщо найсвіжіший пост не за сьогодні (див. stalePostNote). */
   staleNote?: string | null;
+  /** Час останньої успішної перевірки сайту (meta.lastIngestAt) — доказ, що моніторинг живий. */
+  checkedAt?: number | null;
 }): string {
   const lines = ["📊 <b>Статус бота</b>", "", `Черга: <b>${escapeHtml(options.queue)}</b>`];
   if (options.staleNote) lines.push(options.staleNote);
@@ -122,6 +124,10 @@ export function formatStatus(options: {
   if (options.updatedAt !== null) {
     const age = (Date.now() - options.updatedAt) / 1000;
     lines.push(`Оновлено: ${humanizeSeconds(age)} тому`);
+  }
+  if (options.checkedAt !== null && options.checkedAt !== undefined) {
+    const checkedAge = (Date.now() - options.checkedAt) / 1000;
+    lines.push(`Перевірено: ${humanizeSeconds(checkedAge)} тому`);
   }
   return lines.join("\n");
 }
