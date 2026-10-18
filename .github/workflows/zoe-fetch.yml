@@ -30,7 +30,7 @@ jobs:
       - name: Встановити tor
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq tor
+          sudo apt-get install -y -qq tor tor-geoipdb
 
       - name: Підняти tor з українським виходом
         run: |
@@ -38,7 +38,11 @@ jobs:
           TOR_DATA="$RUNNER_TEMP/tor-data"
           mkdir -p "$TOR_DATA"
           chmod 700 "$TOR_DATA"
-          ARGS=(--SocksPort 9050 --ExitNodes "{ua}" --StrictNodes 1 --DataDirectory "$TOR_DATA" --Log "notice file $TOR_LOG")
+          echo "вже запущені tor-процеси:"; pgrep -a tor || echo "немає"
+          echo "зайняті порти 9050/19050:"; ss -ltn | grep -E "9050|19050" || echo "немає"
+          # -f /dev/null — не читати системний /etc/tor/torrc; 19050 — свій порт,
+          # бо 9050 у базовому образі раннера вже може бути зайнятий.
+          ARGS=(-f /dev/null --SocksPort 19050 --ExitNodes "{ua}" --StrictNodes 1 --DataDirectory "$TOR_DATA" --Log "notice file $TOR_LOG")
           if [ -f /usr/share/tor/geoip ]; then ARGS+=(--GeoIPFile /usr/share/tor/geoip); fi
           if [ -f /usr/share/tor/geoip6 ]; then ARGS+=(--GeoIPv6File /usr/share/tor/geoip6); fi
           tor "${ARGS[@]}" &
@@ -55,11 +59,11 @@ jobs:
       - name: Завантажити сторінку через tor
         run: |
           PAGE_FILE="$RUNNER_TEMP/page.html"
-          curl -sS -m 30 --socks5-hostname 127.0.0.1:9050 "https://api.ipify.org?format=json" > "$RUNNER_TEMP/exit-ip.json" 2>/dev/null || true
+          curl -sS -m 30 --socks5-hostname 127.0.0.1:19050 "https://api.ipify.org?format=json" > "$RUNNER_TEMP/exit-ip.json" 2>/dev/null || true
           echo "exit ip: $(cat "$RUNNER_TEMP/exit-ip.json" 2>/dev/null || echo '?')"
           ok=0
           for attempt in 1 2; do
-            curl -sS -k -m 60 --socks5-hostname 127.0.0.1:9050 -A "$BROWSER_UA" \
+            curl -sS -k -m 60 --socks5-hostname 127.0.0.1:19050 -A "$BROWSER_UA" \
               -o "$PAGE_FILE" -w "attempt=$attempt http=%{http_code} size=%{size_download} time=%{time_total}s\n" \
               "$SOURCE_URL" || true
             size=$(wc -c < "$PAGE_FILE" 2>/dev/null || echo 0)
