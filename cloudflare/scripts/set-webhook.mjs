@@ -18,7 +18,7 @@ if (!BOT_TOKEN || !WORKER_URL) {
 }
 
 const webhookUrl = `${WORKER_URL.replace(/\/+$/, "")}/telegram`;
-const body = { url: webhookUrl, allowed_updates: ["message"] };
+const body = { url: webhookUrl, allowed_updates: ["message", "my_chat_member"] };
 if (TELEGRAM_WEBHOOK_SECRET) body.secret_token = TELEGRAM_WEBHOOK_SECRET;
 
 const setResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {

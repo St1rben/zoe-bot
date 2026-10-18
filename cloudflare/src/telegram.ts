@@ -15,6 +15,14 @@ export interface TelegramMessage {
 export interface TelegramUpdate {
   update_id: number;
   message?: TelegramMessage;
+  /** Зміна членства бота в чаті (додали/видалили/змінили права). */
+  my_chat_member?: TelegramChatMemberUpdated;
+}
+
+export interface TelegramChatMemberUpdated {
+  chat: TelegramChat;
+  old_chat_member?: { status?: string };
+  new_chat_member?: { status?: string };
 }
 
 export function botApiUrl(env: Env, method: string): string {

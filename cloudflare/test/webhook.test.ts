@@ -92,6 +92,52 @@ describe("webhook /telegram", () => {
     expect(net.telegramCalls.at(-1)!.text).toContain("Перевірено: 3 хв тому");
   });
 
+  it("додавання бота в групу — вітання одразу і чат зареєстровано", async () => {
+    const net = installNetworkStub({ page: "" });
+    const response = await exports.default.fetch("https://bot.example/telegram", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "test-secret",
+      },
+      body: JSON.stringify({
+        update_id: 11,
+        my_chat_member: {
+          chat: { id: 777, type: "supergroup" },
+          old_chat_member: { status: "left" },
+          new_chat_member: { status: "member" },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(net.textsFor(777)).toHaveLength(1);
+    expect(net.textsFor(777)[0]).toContain("ZOE Outage Bot");
+
+    const chats = await listChats(env);
+    expect(chats.some((chat) => chat.chatId === 777)).toBe(true);
+  });
+
+  it("видалення бота з групи — без повідомлень", async () => {
+    const net = installNetworkStub({ page: "" });
+    const response = await exports.default.fetch("https://bot.example/telegram", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-telegram-bot-api-secret-token": "test-secret",
+      },
+      body: JSON.stringify({
+        update_id: 12,
+        my_chat_member: {
+          chat: { id: 777, type: "supergroup" },
+          old_chat_member: { status: "member" },
+          new_chat_member: { status: "left" },
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    expect(net.telegramCalls).toHaveLength(0);
+  });
+
   it("некоректний JSON ігнорується без падіння", async () => {
     installNetworkStub({ page: "" });
     const response = await exports.default.fetch("https://bot.example/telegram", {
@@ -110,7 +156,7 @@ describe("health", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; version: string };
     expect(body.status).toBe("ok");
-    expect(body.version).toBe("1.4.0");
+    expect(body.version).toBe("1.5.0");
   });
 
   it("GET /telegram — 405", async () => {

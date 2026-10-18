@@ -3,7 +3,7 @@ import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCheck, sendDigestIfDue, stalePostNote, timeInZone } from "../src/monitor";
 import { isBusinessPost, parsePage, type OutagePost } from "../src/parser";
-import { setChatQueue } from "../src/state";
+import { listChats, setChatQueue } from "../src/state";
 import {
   BUSINESS_ARTICLE_HTML,
   MIXED_PAGE_HTML,
@@ -179,5 +179,13 @@ describe("stalePostNote", () => {
   it("без заголовка або без дати — без попередження", () => {
     expect(stalePostNote(null, new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv")).toBeNull();
     expect(stalePostNote("ОНОВЛЕНО ГПВ", new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv")).toBeNull();
+  });
+});
+
+describe("listChats", () => {
+  it("CHAT_ID діє як віртуальна підписка без запису в KV", async () => {
+    const fake = { ...digestEnv({ digestTime: "", timeZone: "UTC" }), CHAT_ID: "-1001964696152" };
+    const chats = await listChats(fake);
+    expect(chats.some((chat) => chat.chatId === -1001964696152)).toBe(true);
   });
 });

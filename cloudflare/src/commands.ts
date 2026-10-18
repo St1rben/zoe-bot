@@ -20,12 +20,17 @@ import {
   putChatState,
   setChatQueue,
 } from "./state";
-import { sendMessage, type TelegramUpdate } from "./telegram";
+import { sendMessage, type TelegramChatMemberUpdated, type TelegramUpdate } from "./telegram";
 
 const QUEUE_RE = /^\d+(?:\.\d+)?$/;
 const COMMAND_RE = /^\/(\w+)(?:@\S+)?(?:\s+(.*))?$/s;
 
 export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<void> {
+  if (update.my_chat_member !== undefined) {
+    await handleBotMembership(env, update.my_chat_member);
+    return;
+  }
+
   const message = update.message;
   const text = message?.text?.trim();
   if (message === undefined || !text) return;
@@ -57,6 +62,25 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<vo
     default:
       break;
   }
+}
+
+/**
+ * Коли бота додають у чат (my_chat_member → member/administrator), одразу
+ * вітаємось і показуємо поточний графік — чат працює без команди /start.
+ */
+async function handleBotMembership(env: Env, event: TelegramChatMemberUpdated): Promise<void> {
+  const previous = event.old_chat_member?.status ?? "left";
+  const current = event.new_chat_member?.status ?? "";
+  const joined =
+    (previous === "left" || previous === "kicked") &&
+    (current === "member" || current === "administrator");
+  if (!joined) return;
+
+  const chatId = event.chat.id;
+  await ensureChat(env, chatId);
+  const queue = (await getChatQueue(env, chatId)) ?? env.QUEUE;
+  await sendMessage(env, chatId, formatWelcome(queue));
+  await sendCurrentSchedule(env, chatId, queue);
 }
 
 async function handleQueue(env: Env, chatId: number, argument: string): Promise<void> {
