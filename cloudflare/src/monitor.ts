@@ -7,8 +7,10 @@
 import { formatDigest, formatStartup, formatUpdate } from "./messages";
 import {
   isBusinessPost,
+  monthGenitive,
   OUTAGE_URL,
   parsePage,
+  parseTitleDate,
   scenarioFor,
   type OutagePost,
 } from "./parser";
@@ -56,6 +58,28 @@ export function timeInZone(date: Date, timeZone: string): { date: string; hm: st
     date: `${part("year")}-${part("month")}-${part("day")}`,
     hm: `${part("hour")}:${part("minute")}`,
   };
+}
+
+/**
+ * Попередження для /status, коли найсвіжіший пост не за сьогодні:
+ * графік на поточний день ще не публікували — інакше старі вікна
+ * виглядають як «поточний стан».
+ */
+export function stalePostNote(title: string | null, now: Date, timeZone: string): string | null {
+  if (title === null) return null;
+  const postDate = parseTitleDate(title);
+  if (postDate === null) return null;
+
+  const todayParts = timeInZone(now, timeZone).date.split("-");
+  const month = Number(todayParts[1] ?? "0");
+  const day = Number(todayParts[2] ?? "0");
+  // Пост за сьогодні або на майбутню дату — попередження не потрібне.
+  if (postDate.month > month || (postDate.month === month && postDate.day >= day)) return null;
+
+  return (
+    `⚠️ На ${day} ${monthGenitive(month)} графік для населення не публікували — ` +
+    `відключень на сьогодні не оголошено. Нижче — дані за ${postDate.day} ${monthGenitive(postDate.month)}.`
+  );
 }
 
 export async function runCheck(env: Env): Promise<CheckSummary> {

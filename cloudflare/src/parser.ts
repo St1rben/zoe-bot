@@ -72,6 +72,38 @@ export function scenarioFor(post: OutagePost, queue: string): Scenario {
   return { kind: SCENARIO_ABSENT, times: null };
 }
 
+const MONTHS_GENITIVE = [
+  "січня",
+  "лютого",
+  "березня",
+  "квітня",
+  "травня",
+  "червня",
+  "липня",
+  "серпня",
+  "вересня",
+  "жовтня",
+  "листопада",
+  "грудня",
+];
+
+/** Дата з заголовка поста («…НА 17 ЖОВТНЯ…» → 17 жовтня). Місяць — 1–12. */
+export function parseTitleDate(title: string): { day: number; month: number } | null {
+  const lowered = title.toLowerCase();
+  for (let index = 0; index < MONTHS_GENITIVE.length; index += 1) {
+    const monthName = MONTHS_GENITIVE[index];
+    if (monthName === undefined) continue;
+    const match = new RegExp(`(\\d{1,2})\\s+${monthName}`).exec(lowered);
+    if (match !== null) return { day: Number(match[1] as string), month: index + 1 };
+  }
+  return null;
+}
+
+/** Назва місяця в родовому відмінку: 10 → «жовтня» (як у заголовках постів). */
+export function monthGenitive(month: number): string {
+  return MONTHS_GENITIVE[month - 1] ?? "";
+}
+
 interface ArticleDraft {
   id: string;
   title: string;

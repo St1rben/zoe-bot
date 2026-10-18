@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCheck, sendDigestIfDue, timeInZone } from "../src/monitor";
+import { runCheck, sendDigestIfDue, stalePostNote, timeInZone } from "../src/monitor";
 import { isBusinessPost, parsePage, type OutagePost } from "../src/parser";
 import { setChatQueue } from "../src/state";
 import {
@@ -154,5 +154,30 @@ describe("timeInZone", () => {
       date: "2026-10-18",
       hm: "00:30",
     });
+  });
+});
+
+describe("stalePostNote", () => {
+  const oldTitle = "ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ (оновлено 18:52)";
+
+  it("пост за вчора — попередження з обома датами", () => {
+    const note = stalePostNote(oldTitle, new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv");
+    expect(note).not.toBeNull();
+    expect(note).toContain("На 18 жовтня");
+    expect(note).toContain("дані за 17 жовтня");
+  });
+
+  it("пост за сьогодні — без попередження", () => {
+    expect(stalePostNote(oldTitle, new Date("2026-10-17T18:00:00Z"), "Europe/Kyiv")).toBeNull();
+  });
+
+  it("пост на завтра — без попередження", () => {
+    const tomorrow = "ОНОВЛЕНО ГПВ НА 18 ЖОВТНЯ ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ";
+    expect(stalePostNote(tomorrow, new Date("2026-10-17T18:00:00Z"), "Europe/Kyiv")).toBeNull();
+  });
+
+  it("без заголовка або без дати — без попередження", () => {
+    expect(stalePostNote(null, new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv")).toBeNull();
+    expect(stalePostNote("ОНОВЛЕНО ГПВ", new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv")).toBeNull();
   });
 });

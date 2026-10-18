@@ -9,6 +9,7 @@ import {
   formatUpdate,
   formatWelcome,
 } from "./messages";
+import { stalePostNote } from "./monitor";
 import { scenarioFor, type Scenario } from "./parser";
 import {
   ensureChat,
@@ -98,10 +99,17 @@ async function handleStatus(env: Env, chatId: number): Promise<void> {
   const scenario: Scenario | null = fresh
     ? { kind: chatState.scenario, times: chatState.times }
     : null;
+  const staleNote = stalePostNote(meta.lastPostTitle, new Date(), env.DIGEST_TZ || "Europe/Kyiv");
 
   await sendMessage(
     env,
     chatId,
-    formatStatus({ queue, title: meta.lastPostTitle, scenario, updatedAt: meta.updatedAt }),
+    formatStatus({
+      queue,
+      title: meta.lastPostTitle,
+      scenario,
+      updatedAt: meta.updatedAt,
+      staleNote,
+    }),
   );
 }

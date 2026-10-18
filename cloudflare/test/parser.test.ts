@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   hasNoSchedule,
   isBusinessPost,
+  monthGenitive,
   parsePage,
   parseQueueLines,
+  parseTitleDate,
   scenarioFor,
   SCENARIO_ABSENT,
   SCENARIO_NO_SCHEDULE,
@@ -167,5 +169,30 @@ describe("scenarioFor", () => {
   it("черги немає в графіку — absent", async () => {
     const post = await consumerPostOrThrow(SAMPLE_HTML);
     expect(scenarioFor(post, "9.9")).toEqual({ kind: SCENARIO_ABSENT, times: null });
+  });
+});
+
+describe("parseTitleDate / monthGenitive", () => {
+  it("витягує дату зі справжніх заголовків постів", () => {
+    expect(
+      parseTitleDate("ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ (оновлено 18:52)"),
+    ).toEqual({ day: 17, month: 10 });
+    expect(
+      parseTitleDate("ГРАФІКИ ПОГОДИННИХ ВІДКЛЮЧЕНЬ НА 06 жовтня НЕ ЗАПЛАНОВАНІ"),
+    ).toEqual({ day: 6, month: 10 });
+    expect(parseTitleDate("ДО УВАГИ ПРОМИСЛОВОСТІ ТА БІЗНЕСУ 18 ЖОВТНЯ")).toEqual({
+      day: 18,
+      month: 10,
+    });
+  });
+
+  it("без дати — null", () => {
+    expect(parseTitleDate("ОНОВЛЕНО ГПВ (оновлено 18:52)")).toBeNull();
+  });
+
+  it("monthGenitive — родовий відмінок", () => {
+    expect(monthGenitive(10)).toBe("жовтня");
+    expect(monthGenitive(3)).toBe("березня");
+    expect(monthGenitive(13)).toBe("");
   });
 });

@@ -108,8 +108,11 @@ export function formatStatus(options: {
   title: string | null;
   scenario: Scenario | null;
   updatedAt: number | null;
+  /** Попередження, якщо найсвіжіший пост не за сьогодні (див. stalePostNote). */
+  staleNote?: string | null;
 }): string {
   const lines = ["📊 <b>Статус бота</b>", "", `Черга: <b>${escapeHtml(options.queue)}</b>`];
+  if (options.staleNote) lines.push(options.staleNote);
   if (options.title) lines.push(`Останній пост: ${escapeHtml(options.title)}`);
   if (options.scenario === null) {
     lines.push("Стан черги: ⏳ даних ще немає");
