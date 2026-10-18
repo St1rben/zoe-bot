@@ -40,9 +40,11 @@ jobs:
           chmod 700 "$TOR_DATA"
           echo "вже запущені tor-процеси:"; pgrep -a tor || echo "немає"
           echo "зайняті порти 9050/19050:"; ss -ltn | grep -E "9050|19050" || echo "немає"
-          # -f /dev/null — не читати системний /etc/tor/torrc; 19050 — свій порт,
+          # Порожній torrc замість системного /etc/tor/torrc; 19050 — свій порт,
           # бо 9050 у базовому образі раннера вже може бути зайнятий.
-          ARGS=(-f /dev/null --SocksPort 19050 --ExitNodes "{ua}" --StrictNodes 1 --DataDirectory "$TOR_DATA" --Log "notice file $TOR_LOG")
+          TORRC_EMPTY="$RUNNER_TEMP/torrc-empty"
+          : > "$TORRC_EMPTY"
+          ARGS=(-f "$TORRC_EMPTY" --SocksPort 19050 --ExitNodes "{ua}" --StrictNodes 1 --DataDirectory "$TOR_DATA" --Log "notice file $TOR_LOG")
           if [ -f /usr/share/tor/geoip ]; then ARGS+=(--GeoIPFile /usr/share/tor/geoip); fi
           if [ -f /usr/share/tor/geoip6 ]; then ARGS+=(--GeoIPv6File /usr/share/tor/geoip6); fi
           tor "${ARGS[@]}" &
