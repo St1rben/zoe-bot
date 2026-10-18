@@ -8,3 +8,4 @@ state.db
 *.egg-info/
 dist/
 build/
+.wrangler/

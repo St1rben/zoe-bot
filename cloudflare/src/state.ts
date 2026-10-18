@@ -34,8 +34,10 @@ export interface Meta {
   digestDate: string | null;
   /** SHA-256 контенту останнього поста — пропуск незмінних перевірок. */
   lastPostSig: string | null;
-  /** Час останнього прийнятого /ingest (оновлюється не частіше ніж раз на 30 хв). */
+  /** Час останнього прийнятого /ingest (оновлюється не частіше ніж раз на 5 хв). */
   lastIngestAt: number | null;
+  /** Час останнього «пробудження» GitHub-запуску сторожем (cron воркера). */
+  lastDispatchAt?: number | null;
 }
 
 export function emptyMeta(): Meta {
@@ -47,6 +49,7 @@ export function emptyMeta(): Meta {
     digestDate: null,
     lastPostSig: null,
     lastIngestAt: null,
+    lastDispatchAt: null,
   };
 }
 

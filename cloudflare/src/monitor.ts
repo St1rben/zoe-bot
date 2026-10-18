@@ -27,8 +27,8 @@ export type CheckSource = "cron" | "ingest";
 
 const USER_AGENT = "ZoeOutageBot-Worker/1.0 (+https://github.com/St1rben/zoe-bot)";
 const FETCH_TIMEOUT_MS = 15_000;
-/** Як часто оновлювати meta.lastIngestAt, щоб не палити write-ліміт KV. */
-const INGEST_HEARTBEAT_MS = 30 * 60 * 1000;
+/** Як часто оновлювати meta.lastIngestAt, щоб не палити write-ліміт KV і не «брехати» сторожу. */
+const INGEST_HEARTBEAT_MS = 5 * 60 * 1000;
 
 export async function fetchPage(url: string = OUTAGE_URL): Promise<string> {
   const response = await fetch(url, {
