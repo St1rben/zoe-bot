@@ -92,6 +92,15 @@ def format_update(title: str, queue: str, scenario: str, times: str | None) -> s
     )
 
 
+def format_unchanged_update(title: str, queue: str, scenario: str, times: str | None) -> str:
+    return (
+        f"🔄 <b>{escape(title)}</b>\n\n"
+        "Графіки було оновлено, але для нашої черги все так само без змін 👌\n\n"
+        f"{_scenario_line(queue, scenario, times)}\n\n"
+        f"{SOURCE_LINE}"
+    )
+
+
 def format_digest(title: str, queue: str, scenario: str, times: str | None) -> str:
     return (
         "🌙 <b>Нагадування про графік</b>\n\n"

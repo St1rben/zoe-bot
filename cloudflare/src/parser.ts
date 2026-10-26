@@ -35,6 +35,39 @@ const BUSINESS_TEXT_MARKERS = ["НЕ СТОСУЮТЬСЯ НАСЕЛЕННЯ"];
 
 const QUEUE_LINE_RE = /^(\d+(?:\.\d+)?)\s*:\s*(.+)$/;
 
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: "\u00A0",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  laquo: "\u00AB",
+  raquo: "\u00BB",
+  hellip: "\u2026",
+  shy: "\u00AD",
+};
+
+/**
+ * HTMLRewriter (lol_html) не декодує character references у тексті — «17:00 &#8211; 21:00»
+ * зі сторінки zoe.com.ua потрапляє в парсер як литеральний текст. Декодуємо самі.
+ */
+export function decodeHtmlEntities(input: string): string {
+  return input.replace(/&(#[xX]?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);/g, (match, body: string) => {
+    if (body.startsWith("#")) {
+      const codePoint =
+        body[1] === "x" || body[1] === "X"
+          ? parseInt(body.slice(2), 16)
+          : parseInt(body.slice(1), 10);
+      if (!Number.isFinite(codePoint) || codePoint < 1 || codePoint > 0x10ffff) return match;
+      return String.fromCodePoint(codePoint);
+    }
+    return NAMED_ENTITIES[body] ?? NAMED_ENTITIES[body.toLowerCase()] ?? match;
+  });
+}
+
 export function hasNoSchedule(text: string): boolean {
   const upper = text.toUpperCase();
   return NO_SCHEDULE_MARKERS.some((marker) => upper.includes(marker));
@@ -102,6 +135,45 @@ export function parseTitleDate(title: string): { day: number; month: number } | 
 /** Назва місяця в родовому відмінку: 10 → «жовтня» (як у заголовках постів). */
 export function monthGenitive(month: number): string {
   return MONTHS_GENITIVE[month - 1] ?? "";
+}
+
+/**
+ * Визначає, чи є новий пост оновленням раніше опублікованого графіка:
+ * - Той самий id статті (відредаговано на сайті)
+ * - Або дата в заголовку збігається з датою попереднього поста
+ * - Або заголовок містить слово «оновлен» (якщо дата не розпізнана)
+ */
+export function isScheduleUpdate(
+  previousPostId: string | null,
+  previousTitle: string | null,
+  newPost: OutagePost,
+): boolean {
+  if (previousPostId === null) return false;
+  if (previousPostId === newPost.id) return true;
+
+  const prevDate = previousTitle ? parseTitleDate(previousTitle) : null;
+  const newDate = parseTitleDate(newPost.title);
+
+  // Якщо в обох постах є дата і вона різна — це новий день, а не оновлення
+  if (
+    prevDate !== null &&
+    newDate !== null &&
+    (prevDate.day !== newDate.day || prevDate.month !== newDate.month)
+  ) {
+    return false;
+  }
+
+  // Якщо дата однакова — це оновлення графіка на той самий день
+  if (
+    prevDate !== null &&
+    newDate !== null &&
+    prevDate.day === newDate.day &&
+    prevDate.month === newDate.month
+  ) {
+    return true;
+  }
+
+  return newPost.title.toLowerCase().includes("оновлен");
 }
 
 interface ArticleDraft {
@@ -176,8 +248,9 @@ export async function parsePage(html: string): Promise<OutagePost[]> {
   return state.drafts
     .filter((draft) => draft.id !== "")
     .map((draft) => {
-      const text = normalizeText(draft.text);
-      return { id: draft.id, title: draft.title.trim(), text, queues: parseQueueLines(text) };
+      const text = normalizeText(decodeHtmlEntities(draft.text));
+      const title = decodeHtmlEntities(draft.title.trim());
+      return { id: draft.id, title, text, queues: parseQueueLines(text) };
     });
 }
 

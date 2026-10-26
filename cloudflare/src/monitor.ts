@@ -4,9 +4,10 @@
  * станом у KV → надіслати зміни.
  */
 
-import { formatDigest, formatStartup, formatUpdate } from "./messages";
+import { formatDigest, formatStartup, formatUnchangedUpdate, formatUpdate } from "./messages";
 import {
   isBusinessPost,
+  isScheduleUpdate,
   monthGenitive,
   OUTAGE_URL,
   parsePage,
@@ -140,20 +141,31 @@ export async function processHtml(
   }
 
   const defaultQueue: string = env.QUEUE;
+  const isUpdate = isScheduleUpdate(meta.lastPostId, meta.lastPostTitle, post);
+
   for (const chat of chats) {
     const queue = chat.queue ?? defaultQueue;
     const scenario = scenarioFor(post, queue);
     const previous = await getChatState(env, chat.chatId);
-    if (
+
+    const isSameSchedule =
       previous !== null &&
-      previous.postId === post.id &&
       previous.queue === queue &&
       previous.scenario === scenario.kind &&
-      previous.times === scenario.times
-    ) {
+      previous.times === scenario.times;
+
+    const isChatUpdate = isUpdate || (previous !== null && previous.postId === post.id);
+
+    let messageText: string;
+    if (previous !== null && isChatUpdate && isSameSchedule) {
+      messageText = formatUnchangedUpdate(post.title, queue, scenario);
+    } else if (isSameSchedule && previous !== null && previous.postId === post.id) {
       continue;
+    } else {
+      messageText = formatUpdate(post.title, queue, scenario);
     }
-    if (await sendMessage(env, chat.chatId, formatUpdate(post.title, queue, scenario))) {
+
+    if (await sendMessage(env, chat.chatId, messageText)) {
       await putChatState(env, chat.chatId, {
         postId: post.id,
         queue,

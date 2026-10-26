@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  decodeHtmlEntities,
   hasNoSchedule,
   isBusinessPost,
+  isScheduleUpdate,
   monthGenitive,
   parsePage,
   parseQueueLines,
@@ -89,6 +91,27 @@ describe("parsePage", () => {
     const post = await consumerPostOrThrow(html);
     expect(post.text).toContain("За терміновою вказівкою НЕК «Укренерго»");
     expect(post.queues).toEqual({ "1.1": "10:30 - 13:30", "5.1": "16:30 - 20:30" });
+  });
+
+  it("декодує HTML-entities (&#8211;, &ndash;, &amp;) — HTMLRewriter їх не декодує", async () => {
+    const html = `
+<article id="post-4000">
+  <h2>ГПВ &#8220;26 ЖОВТНЯ&#8221; &mdash; оновлено</h2>
+  <div class="content">
+    <p>1.1: 10:30 &#8211; 13:30<br />
+    5.1: 17:00 &#8211; 21:00</p>
+  </div>
+</article>`;
+    const post = await consumerPostOrThrow(html);
+    expect(post.title).toBe("ГПВ \u201C26 ЖОВТНЯ\u201D \u2014 оновлено");
+    expect(post.text).toContain("17:00 \u2013 21:00");
+    expect(post.queues).toEqual({ "1.1": "10:30 - 13:30", "5.1": "17:00 - 21:00" });
+  });
+
+  it("decodeHtmlEntities: невідомі/биті entities лишає як є", async () => {
+    expect(decodeHtmlEntities("a &nbsp; b &unknown; &#; &#xZZ; &amp;")).toBe(
+      "a \u00A0 b &unknown; &#; &#xZZ; &",
+    );
   });
 });
 
@@ -194,5 +217,64 @@ describe("parseTitleDate / monthGenitive", () => {
     expect(monthGenitive(10)).toBe("жовтня");
     expect(monthGenitive(3)).toBe("березня");
     expect(monthGenitive(13)).toBe("");
+  });
+});
+
+describe("isScheduleUpdate", () => {
+  const dummyPost = (id: string, title: string): OutagePost => ({
+    id,
+    title,
+    text: "some text",
+    queues: { "5.1": "17:00 - 21:00" },
+  });
+
+  it("перший запуск (previousPostId === null) — не оновлення", () => {
+    expect(isScheduleUpdate(null, null, dummyPost("post-1", "ГПВ на 26 жовтня"))).toBe(false);
+  });
+
+  it("той самий ID поста — завжди оновлення", () => {
+    expect(isScheduleUpdate("post-1", "ГПВ на 26 жовтня", dummyPost("post-1", "ГПВ на 26 жовтня"))).toBe(
+      true,
+    );
+  });
+
+  it("різні ID, але однакова дата в заголовках — оновлення", () => {
+    expect(
+      isScheduleUpdate(
+        "post-1",
+        "ГПВ НА 26 ЖОВТНЯ",
+        dummyPost("post-2", "ОНОВЛЕНО ГПВ НА 26 ЖОВТНЯ"),
+      ),
+    ).toBe(true);
+  });
+
+  it("різні ID та різні дати — новий день, а не оновлення", () => {
+    expect(
+      isScheduleUpdate(
+        "post-1",
+        "ГПВ НА 26 ЖОВТНЯ",
+        dummyPost("post-2", "ГПВ НА 27 ЖОВТНЯ"),
+      ),
+    ).toBe(false);
+  });
+
+  it("різні дати навіть зі словом оновлено — новий день", () => {
+    expect(
+      isScheduleUpdate(
+        "post-1",
+        "ГПВ НА 26 ЖОВТНЯ",
+        dummyPost("post-2", "ОНОВЛЕНО ГПВ НА 27 ЖОВТНЯ"),
+      ),
+    ).toBe(false);
+  });
+
+  it("заголовок без дати, але зі словом «оновлено» — оновлення", () => {
+    expect(
+      isScheduleUpdate(
+        "post-1",
+        "Графік відключень",
+        dummyPost("post-2", "Оновлено графік відключень"),
+      ),
+    ).toBe(true);
   });
 });

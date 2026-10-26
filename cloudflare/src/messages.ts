@@ -97,6 +97,15 @@ export function formatUpdate(title: string, queue: string, scenario: Scenario): 
   );
 }
 
+export function formatUnchangedUpdate(title: string, queue: string, scenario: Scenario): string {
+  return (
+    `🔄 <b>${escapeHtml(title)}</b>\n\n` +
+    `Графіки було оновлено, але для нашої черги все так само без змін 👌\n\n` +
+    `${scenarioLine(queue, scenario)}\n\n` +
+    SOURCE_LINE
+  );
+}
+
 export function formatDigest(title: string, queue: string, scenario: Scenario): string {
   return (
     "🌙 <b>Нагадування про графік</b>\n\n" + `${escapeHtml(title)}\n` + scenarioLine(queue, scenario)

@@ -24,6 +24,15 @@ def test_format_update_absent() -> None:
     assert "відсутня" in text
 
 
+def test_format_unchanged_update() -> None:
+    text = messages.format_unchanged_update("Оновлено ГПВ", "5.1", "present", "08:00 - 10:00")
+    assert "🔄" in text
+    assert "Оновлено ГПВ" in text
+    assert "без змін" in text
+    assert "Черга 5.1: 08:00 - 10:00" in text
+    assert "zoe.com.ua" in text
+
+
 def test_format_update_escapes_html() -> None:
     text = messages.format_update('<b>"Тест"</b>', "5.1", "absent", None)
     assert '<b>"Тест"</b>' not in text

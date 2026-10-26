@@ -74,6 +74,28 @@ describe("runCheck", () => {
     expect(net.telegramCalls[2]!.text).toContain("5.1: 12:00 - 14:00");
   });
 
+  it("коли пост оновлено, але черга чату не змінилася — надсилається сповіщення без змін", async () => {
+    const page = { html: MIXED_PAGE_HTML };
+    const net = installNetworkStub({ page: () => page.html });
+    await setChatQueue(env, CHAT_ID, null);
+    await runCheck(env);
+    expect(net.telegramCalls).toHaveLength(2);
+
+    page.html = MIXED_PAGE_HTML.replace("1.1: 08:00 - 12:00", "1.1: 09:00 - 13:00");
+    const summary = await runCheck(env);
+    expect(summary.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls).toHaveLength(3);
+
+    const call = net.telegramCalls[2]!;
+    expect(call.text).toContain("Графіки було оновлено, але для нашої черги все так само без змін");
+    expect(call.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
+    expect(call.text).toContain("🔄");
+
+    const nextSummary = await runCheck(env);
+    expect(nextSummary.sentTo).toEqual([]);
+    expect(net.telegramCalls).toHaveLength(3);
+  });
+
   it("зміна черги чату: /queue одразу надсилає графік нової черги", async () => {
     const net = installNetworkStub({ page: MIXED_PAGE_HTML });
     await setChatQueue(env, CHAT_ID, null);
