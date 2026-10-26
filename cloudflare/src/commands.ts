@@ -65,8 +65,8 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<vo
 }
 
 /**
- * Коли бота додають у чат (my_chat_member → member/administrator), одразу
- * вітаємось і показуємо поточний графік — чат працює без команди /start.
+ * Коли бота додають у чат (my_chat_member → member/administrator),
+ * тихо реєструємо чат без жодних повідомлень.
  */
 async function handleBotMembership(env: Env, event: TelegramChatMemberUpdated): Promise<void> {
   const previous = event.old_chat_member?.status ?? "left";
@@ -78,9 +78,21 @@ async function handleBotMembership(env: Env, event: TelegramChatMemberUpdated): 
 
   const chatId = event.chat.id;
   await ensureChat(env, chatId);
-  const queue = (await getChatQueue(env, chatId)) ?? env.QUEUE;
-  await sendMessage(env, chatId, formatWelcome(queue));
-  await sendCurrentSchedule(env, chatId, queue);
+
+  // Тихо фіксуємо поточний стан черги без повідомлень у чат
+  const meta = await getMeta(env);
+  const post = postFromMeta(meta);
+  if (post !== null) {
+    const queue = (await getChatQueue(env, chatId)) ?? env.QUEUE;
+    const scenario = scenarioFor(post, queue);
+    await putChatState(env, chatId, {
+      postId: post.id,
+      queue,
+      scenario: scenario.kind,
+      times: scenario.times,
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 async function handleQueue(env: Env, chatId: number, argument: string): Promise<void> {

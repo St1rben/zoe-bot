@@ -92,7 +92,7 @@ describe("webhook /telegram", () => {
     expect(net.telegramCalls.at(-1)!.text).toContain("Перевірено: 3 хв тому");
   });
 
-  it("додавання бота в групу — вітання одразу і чат зареєстровано", async () => {
+  it("додавання бота в групу — тихий вхід без повідомлень, чат зареєстровано", async () => {
     const net = installNetworkStub({ page: "" });
     const response = await exports.default.fetch("https://bot.example/telegram", {
       method: "POST",
@@ -110,8 +110,7 @@ describe("webhook /telegram", () => {
       }),
     });
     expect(response.status).toBe(200);
-    expect(net.textsFor(777)).toHaveLength(1);
-    expect(net.textsFor(777)[0]).toContain("ZOE Outage Bot");
+    expect(net.textsFor(777)).toHaveLength(0);
 
     const chats = await listChats(env);
     expect(chats.some((chat) => chat.chatId === 777)).toBe(true);
@@ -156,7 +155,7 @@ describe("health", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; version: string };
     expect(body.status).toBe("ok");
-    expect(body.version).toBe("1.5.0");
+    expect(body.version).toBe("1.6.0");
   });
 
   it("GET /telegram — 405", async () => {
