@@ -18,7 +18,9 @@ if (!BOT_TOKEN || !WORKER_URL) {
 }
 
 const webhookUrl = `${WORKER_URL.replace(/\/+$/, "")}/telegram`;
-const body = { url: webhookUrl, allowed_updates: ["message", "my_chat_member"] };
+// callback_query обов'язковий: без нього Telegram не надсилає натискання
+// інлайн-кнопок вибору черг (qt:N.N).
+const body = { url: webhookUrl, allowed_updates: ["message", "my_chat_member", "callback_query"] };
 if (TELEGRAM_WEBHOOK_SECRET) body.secret_token = TELEGRAM_WEBHOOK_SECRET;
 
 const setResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {

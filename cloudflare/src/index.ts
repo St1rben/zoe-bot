@@ -8,9 +8,9 @@
  */
 
 import { handleUpdate } from "./commands";
-import { triggerWorkflowDispatch } from "./github";
+import { wakeFetchIfStale } from "./github";
 import { processHtml } from "./monitor";
-import { getMeta, putMeta } from "./state";
+import { getMeta } from "./state";
 import type { TelegramUpdate } from "./telegram";
 import { VERSION } from "./version";
 
@@ -52,30 +52,17 @@ export default {
 
   /**
    * Воркер фізично не може завантажити zoe (гео-блок), тому його cron працює
-   * сторожем: якщо /ingest не приносив дані довше WAKE_STALE_MS, дьоргаємо
-   * запуск zoe-fetch.yml на GitHub через workflow_dispatch.
+   * сторожем: якщо /ingest не приносив дані довше 3 хв, дьоргаємо запуск
+   * zoe-fetch.yml на GitHub через workflow_dispatch (див. wakeFetchIfStale).
    */
   async scheduled(_controller: ScheduledController, env: Env, _ctx: ExecutionContext): Promise<void> {
     try {
-      const meta = await getMeta(env);
-      const now = Date.now();
-      const lastIngestAt = meta.lastIngestAt ?? 0;
-      const lastDispatchAt = meta.lastDispatchAt ?? 0;
-      if (now - lastIngestAt > WAKE_STALE_MS && now - lastDispatchAt > WAKE_MIN_GAP_MS) {
-        const dispatched = await triggerWorkflowDispatch(env);
-        console.log(`wake: dispatched=${dispatched} silentMs=${now - lastIngestAt}`);
-        if (dispatched) await putMeta(env, { ...meta, lastDispatchAt: now });
-      }
+      await wakeFetchIfStale(env);
     } catch (error) {
       console.error("scheduled wake failed:", error);
     }
   },
 } satisfies ExportedHandler<Env>;
-
-/** Як довго /ingest може мовчати, перш ніж сторож будить zoe-fetch.yml. */
-const WAKE_STALE_MS = 8 * 60 * 1000;
-/** Не турбувати GitHub частіше ніж раз на 5 хв навіть під час повної тиші. */
-const WAKE_MIN_GAP_MS = 5 * 60 * 1000;
 
 /** Межі тіла /ingest: жива сторінка zoe ~120 КБ; менше 512 Б — явно не сторінка. */
 const MIN_INGEST_BYTES = 512;

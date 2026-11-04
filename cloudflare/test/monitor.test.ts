@@ -1,12 +1,13 @@
 import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCheck, sendDigestIfDue, stalePostNote, timeInZone } from "../src/monitor";
+import { processHtml, runCheck, sendDigestIfDue, stalePostNote, timeInZone } from "../src/monitor";
 import { isBusinessPost, parsePage, type OutagePost } from "../src/parser";
-import { listChats, setChatQueue } from "../src/state";
+import { emptyMeta, getChatState, getMeta, listChats, putMeta, setChatQueues } from "../src/state";
 import {
   BUSINESS_ARTICLE_HTML,
   MIXED_PAGE_HTML,
+  NO_ARTICLE_HTML,
   SAMPLE_HTML_UPDATED,
 } from "./fixtures";
 import { installNetworkStub } from "./helpers";
@@ -39,7 +40,7 @@ function digestEnv(overrides: { digestTime: string; timeZone: string }): Env {
 describe("runCheck", () => {
   it("перший запуск: вітання + оновлення, повторний — без дублів", async () => {
     const net = installNetworkStub({ page: MIXED_PAGE_HTML });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
 
     const first = await runCheck(env);
     expect(first.ok).toBe(true);
@@ -63,7 +64,7 @@ describe("runCheck", () => {
   it("оновлення часу того самого поста надсилається ще раз", async () => {
     const page = { html: MIXED_PAGE_HTML };
     const net = installNetworkStub({ page: () => page.html });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     await runCheck(env);
     expect(net.telegramCalls).toHaveLength(2);
 
@@ -77,7 +78,7 @@ describe("runCheck", () => {
   it("коли пост оновлено, але черга чату не змінилася — надсилається сповіщення без змін", async () => {
     const page = { html: MIXED_PAGE_HTML };
     const net = installNetworkStub({ page: () => page.html });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     await runCheck(env);
     expect(net.telegramCalls).toHaveLength(2);
 
@@ -87,7 +88,7 @@ describe("runCheck", () => {
     expect(net.telegramCalls).toHaveLength(3);
 
     const call = net.telegramCalls[2]!;
-    expect(call.text).toContain("Графіки було оновлено, але для нашої черги все так само без змін");
+    expect(call.text).toContain("Графіки було оновлено, але для ваших черг усе без змін");
     expect(call.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
     expect(call.text).toContain("🔄");
 
@@ -98,7 +99,7 @@ describe("runCheck", () => {
 
   it("зміна черги чату: /queue одразу надсилає графік нової черги", async () => {
     const net = installNetworkStub({ page: MIXED_PAGE_HTML });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     await runCheck(env);
     expect(net.telegramCalls).toHaveLength(2);
 
@@ -115,17 +116,165 @@ describe("runCheck", () => {
     });
     expect(response.status).toBe(200);
     expect(net.telegramCalls).toHaveLength(4);
-    expect(net.telegramCalls[2]!.text).toContain("Чергу змінено на <b>5.2</b>");
+    expect(net.telegramCalls[2]!.text).toContain("Відстежувана черга: <b>5.2</b>");
     expect(net.telegramCalls[3]!.text).toContain("Черга 5.2: 10:00 - 12:00");
+  });
+
+  it("чат з кількома чергами: одне зведене повідомлення по всіх", async () => {
+    const page = { html: MIXED_PAGE_HTML };
+    const net = installNetworkStub({ page: () => page.html });
+    await setChatQueues(env, CHAT_ID, ["5.1", "5.2"]);
+
+    const first = await runCheck(env);
+    expect(first.sentTo).toEqual([CHAT_ID]);
+    // вітання + одне зведене оновлення
+    expect(net.telegramCalls).toHaveLength(2);
+    const update = net.telegramCalls[1]!;
+    expect(update.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
+    expect(update.text).toContain("Черга 5.2: 10:00 - 12:00");
+
+    // без змін — тиша
+    const second = await runCheck(env);
+    expect(second.sentTo).toEqual([]);
+    expect(net.telegramCalls).toHaveLength(2);
+
+    // змінилася одна з черг — зведене оновлення знову одне
+    page.html = SAMPLE_HTML_UPDATED;
+    const third = await runCheck(env);
+    expect(third.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls).toHaveLength(3);
+    const refreshed = net.telegramCalls[2]!;
+    expect(refreshed.text).toContain("5.1: 12:00 - 14:00");
+    expect(refreshed.text).toContain("Черга 5.2: 10:00 - 12:00");
+  });
+
+  it("міграція старого metadata.queue: чат читається та продовжує отримувати графік", async () => {
+    const net = installNetworkStub({ page: MIXED_PAGE_HTML });
+    // старий формат: metadata.queue (рядок), без queues
+    await env.STATE.put("chat:" + CHAT_ID, "1", { metadata: { queue: "5.2" } });
+
+    const summary = await runCheck(env);
+    expect(summary.sentTo).toEqual([CHAT_ID]);
+    const update = net.telegramCalls.at(-1)!;
+    expect(update.text).toContain("Черга 5.2: 10:00 - 12:00");
+    // і нове повідомлення не містить сценаріїв інших черг
+    expect(update.text).not.toContain("Черга 5.1");
+  });
+
+  it("міграція старого chat_state (queue/scenario/times): без повторних сповіщень", async () => {
+    const net = installNetworkStub({ page: MIXED_PAGE_HTML });
+    await setChatQueues(env, CHAT_ID, null);
+    // старий формат стану: сценарій уже надсилався саме такий, як у пості
+    await env.STATE.put(
+      "chat_state:" + CHAT_ID,
+      JSON.stringify({
+        postId: "post-1234",
+        queue: "5.1",
+        scenario: "present",
+        times: "08:00 - 10:00, 16:00 - 20:00",
+        updatedAt: 1,
+      }),
+    );
+
+    const summary = await runCheck(env);
+    // вітання (meta порожнє) + «оновлено без змін» — дубля основного сценарію немає
+    expect(net.telegramCalls).toHaveLength(2);
+    expect(net.telegramCalls[0]!.text).toContain("Бот запущено");
+    expect(net.telegramCalls[1]!.text).toContain("для ваших черг усе без змін");
+
+    const state = await getChatState(env, CHAT_ID);
+    expect(state?.queues["5.1"]?.kind).toBe("present");
+    expect(state?.queues["5.1"]?.times).toBe("08:00 - 10:00, 16:00 - 20:00");
+  });
+
+  it("knownQueues накопичує черги з постів", async () => {
+    installNetworkStub({ page: MIXED_PAGE_HTML });
+    await setChatQueues(env, CHAT_ID, null);
+    await runCheck(env);
+
+    const meta = await getMeta(env);
+    expect(meta.knownQueues).toEqual(["1.1", "5.1", "5.2"]);
   });
 
   it("бізнес-пости повністю ігноруються", async () => {
     const net = installNetworkStub({ page: BUSINESS_ARTICLE_HTML });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
 
     const summary = await runCheck(env);
     expect(summary.skipped).toBe("no_consumer_post");
     expect(net.telegramCalls).toHaveLength(0);
+  });
+
+  it("нестандартний формат публікації: префікси, коми, точки, «до» — графік розібрано", async () => {
+    const variantHtml = `
+<html><body>
+<article id="post-7777">
+  <h2>Графік відключень на 17 жовтня</h2>
+  <div class="content">
+    <p>Шановні споживачі!</p>
+    • Черга 5,1 — з 08.00 до 10.00, 16:00–20:00<br />
+    Черга 4.2: 09:00 - 11:00
+  </div>
+</article>
+</body></html>`;
+    const net = installNetworkStub({ page: variantHtml });
+    await setChatQueues(env, CHAT_ID, ["5.1"]);
+
+    const summary = await runCheck(env);
+    expect(summary.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls.at(-1)!.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
+  });
+
+  it("пост без ознак графика не надсилається і рахується як збій формату", async () => {
+    const page = { html: NO_ARTICLE_HTML };
+    const net = installNetworkStub({ page: () => page.html });
+    await setChatQueues(env, CHAT_ID, null);
+
+    // порожня сторінка — жодних повідомлень користувачам
+    const summary = await runCheck(env);
+    expect(summary.skipped).toBe("no_consumer_post");
+    expect(net.telegramCalls).toHaveLength(0);
+  });
+
+  it("серія збоїв формату — алерт адміну після порогу, успіх скидає серію", async () => {
+    const page = { html: NO_ARTICLE_HTML };
+    const net = installNetworkStub({ page: () => page.html });
+    const adminEnv = {
+      STATE: env.STATE,
+      BOT_TOKEN: "test-token",
+      QUEUE: "5.1",
+      DIGEST_TIME: "",
+      DIGEST_TZ: "Europe/Kyiv",
+      DRY_RUN: "0",
+      ADMIN_IDS: "724390773",
+    } as unknown as Env;
+
+    // 5 збоїв — ще тихо (поріг 6)
+    for (let index = 0; index < 5; index += 1) {
+      await processHtml(adminEnv, NO_ARTICLE_HTML, "ingest");
+    }
+    expect(net.telegramCalls).toHaveLength(0);
+
+    // 6-й — алерт адміну
+    await processHtml(adminEnv, NO_ARTICLE_HTML, "ingest");
+    expect(net.telegramCalls).toHaveLength(1);
+    expect(net.telegramCalls[0]!.chatId).toBe(724390773);
+    expect(net.telegramCalls[0]!.text).toContain("Проблема з розбором графіків");
+
+    // 7-й — повторного алерта немає (не частіше ніж раз на 12 год)
+    await processHtml(adminEnv, NO_ARTICLE_HTML, "ingest");
+    expect(net.telegramCalls).toHaveLength(1);
+
+    // успішний розбір скидає серію — наступні 5 збоїв знову тихі
+    page.html = MIXED_PAGE_HTML;
+    await setChatQueues(adminEnv, CHAT_ID, null);
+    await processHtml(adminEnv, MIXED_PAGE_HTML, "ingest");
+    expect(net.telegramCalls).toHaveLength(3); // вітання + оновлення для чату
+    page.html = NO_ARTICLE_HTML;
+    for (let index = 0; index < 5; index += 1) {
+      await processHtml(adminEnv, NO_ARTICLE_HTML, "ingest");
+    }
+    expect(net.telegramCalls).toHaveLength(3);
   });
 
   it("HTTP-помилка сторінки кидає помилку, щоб cron повторив", async () => {
@@ -137,7 +286,7 @@ describe("runCheck", () => {
 describe("sendDigestIfDue", () => {
   it("надсилає у вказаний час один раз на день", async () => {
     const net = installNetworkStub({ page: MIXED_PAGE_HTML });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     const post = await firstConsumerPostOrThrow(MIXED_PAGE_HTML);
     const fake = digestEnv({ digestTime: "20:15", timeZone: "UTC" });
 
@@ -160,6 +309,21 @@ describe("sendDigestIfDue", () => {
     // наступний день — знову надсилає
     expect(await sendDigestIfDue(fake, post, new Date("2026-10-18T20:15:05Z"))).toBe(true);
     expect(net.telegramCalls).toHaveLength(2);
+  });
+
+  it("надсилає у перше попадання ПІСЛЯ DIGEST_TIME, а не рівно о тій хвилині", async () => {
+    const net = installNetworkStub({ page: MIXED_PAGE_HTML });
+    await setChatQueues(env, CHAT_ID, null);
+    const post = await firstConsumerPostOrThrow(MIXED_PAGE_HTML);
+    const fake = digestEnv({ digestTime: "20:00", timeZone: "UTC" });
+
+    // до часу — тиша
+    expect(await sendDigestIfDue(fake, post, new Date("2026-10-17T19:59:00Z"))).toBe(false);
+    expect(net.telegramCalls).toHaveLength(0);
+
+    // /ingest не приходив рівно о 20:00 — перший після (20:03) все одно надсилає
+    expect(await sendDigestIfDue(fake, post, new Date("2026-10-17T20:03:30Z"))).toBe(true);
+    expect(net.telegramCalls).toHaveLength(1);
   });
 });
 

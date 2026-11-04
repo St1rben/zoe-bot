@@ -15,6 +15,7 @@ export default defineConfig({
           DIGEST_TIME: "",
           DIGEST_TZ: "Europe/Kyiv",
           DRY_RUN: "0",
+          ADMIN_IDS: "",
         },
       },
     }),

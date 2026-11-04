@@ -12,8 +12,8 @@ import { isBusinessPost, parsePage } from "../src/parser";
 describe("жива сторінка zoe (знімок)", () => {
   it("парситься повністю", async () => {
     const posts = await parsePage(raw);
-    // 22 теги <article>, але два з них без id — ігноруються (як у Python-версії)
-    expect(posts).toHaveLength(20);
+    // 22 теги <article>; два з них без id отримують синтетичні post-auto-*
+    expect(posts).toHaveLength(22);
     expect(posts[0]!.id).toBe("post-392435");
     expect(isBusinessPost(posts[0]!)).toBe(true);
   });

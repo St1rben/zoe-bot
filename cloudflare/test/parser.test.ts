@@ -57,10 +57,27 @@ describe("parsePage", () => {
     expect(await consumerPost(NO_ARTICLE_HTML)).toBeNull();
   });
 
-  it("стаття без id ігнорується", async () => {
+  it("стаття без id отримує синтетичний id і парситься", async () => {
     const html = '<article><h2>Без id</h2><div class="content">5.1: 08:00 - 10:00</div></article>';
-    expect(await parsePage(html)).toEqual([]);
-    expect(await consumerPost(html)).toBeNull();
+    const posts = await parsePage(html);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.id).toBe("post-auto-1");
+    expect(posts[0]!.queues["5.1"]).toBe("08:00 - 10:00");
+  });
+
+  it("стаття без .content — фолбек на весь текст статті", async () => {
+    const html = `
+<article id="post-5000">
+  <h2>Графік відключень на 17 жовтня</h2>
+  <p>1.1: 10:30 - 13:30<br />
+  5.1: 16:30 - 20:30</p>
+</article>`;
+    const posts = await parsePage(html);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.title).toBe("Графік відключень на 17 жовтня");
+    // заголовок не потрапляє у текст і не ламає розбір черг
+    expect(posts[0]!.text).not.toContain("Графік відключень");
+    expect(posts[0]!.queues).toEqual({ "1.1": "10:30 - 13:30", "5.1": "16:30 - 20:30" });
   });
 
   it("пропускає бізнес-пост і бере наступний", async () => {
@@ -148,6 +165,12 @@ describe("hasNoSchedule", () => {
     expect(hasNoSchedule(post.text)).toBe(true);
   });
 
+  it("знаходить варіанти формулювань («НЕ ЗАСТОСОВУЮТЬСЯ», «НЕ ДІЮТЬ»)", () => {
+    expect(hasNoSchedule("Графіки погодинних відключень НЕ ЗАСТОСОВУЮТЬСЯ")).toBe(true);
+    expect(hasNoSchedule("Відключення сьогодні НЕ ДІЮТЬ")).toBe(true);
+    expect(hasNoSchedule("графіки не плануються")).toBe(true);
+  });
+
   it("для звичайного поста — false", async () => {
     const post = await consumerPostOrThrow(SAMPLE_HTML);
     expect(hasNoSchedule(post.text)).toBe(false);
@@ -164,8 +187,32 @@ describe("parseQueueLines", () => {
     });
   });
 
-  it("ігнорує рядки без точного формату «номер: час»", () => {
-    expect(parseQueueLines("Черга 5.1: 08:00 - 10:00\nДякуємо")).toEqual({});
+  it("толерантний до варіантів: префікси, коми, точки в часі, «до»", () => {
+    expect(parseQueueLines("Черга 5.1: 08:00 - 10:00")).toEqual({ "5.1": "08:00 - 10:00" });
+    expect(parseQueueLines("• 4,2 — 08.00–10.00, 16:00–18:30")).toEqual({
+      "4.2": "08:00 - 10:00, 16:00 - 18:30",
+    });
+    expect(parseQueueLines("3: з 09:00 до 11:00")).toEqual({ "3": "09:00 - 11:00" });
+    expect(parseQueueLines("Черга 6.1: 8:00 - 10:00")).toEqual({ "6.1": "08:00 - 10:00" });
+  });
+
+  it("перенос вікон на наступний рядок продовжує попередню чергу", () => {
+    expect(parseQueueLines("5.1: 08:00 - 10:00,\n16:00 - 20:00")).toEqual({
+      "5.1": "08:00 - 10:00, 16:00 - 20:00",
+    });
+  });
+
+  it("ігнорує текст без повного вікна часу", () => {
+    expect(parseQueueLines("Дякуємо за розуміння")).toEqual({});
+    expect(parseQueueLines("5.1: дивіться на сайті")).toEqual({});
+    // проза з часом до першої черги не приклеюється ні до чого
+    expect(parseQueueLines("З 08:00 до 18:00 працюємо\n5.1: 09:00 - 11:00")).toEqual({
+      "5.1": "09:00 - 11:00",
+    });
+    // проза з часом після черги з текстовим префіксом — не продовження
+    expect(parseQueueLines("5.1: 09:00 - 11:00\nДякуємо! З 12:00 до 13:00 обід")).toEqual({
+      "5.1": "09:00 - 11:00",
+    });
   });
 
   it("нормалізує тире – та — у звичайний дефіс", () => {
@@ -211,6 +258,14 @@ describe("parseTitleDate / monthGenitive", () => {
 
   it("без дати — null", () => {
     expect(parseTitleDate("ОНОВЛЕНО ГПВ (оновлено 18:52)")).toBeNull();
+  });
+
+  it("числові дати: «17.10», «17.10.2026», «17/10»", () => {
+    expect(parseTitleDate("Графік відключень на 17.10")).toEqual({ day: 17, month: 10 });
+    expect(parseTitleDate("ГПВ на 17.10.2026")).toEqual({ day: 17, month: 10 });
+    expect(parseTitleDate("Графіки 17/10 не заплановані")).toEqual({ day: 17, month: 10 });
+    // «18:52» — час, а не дата
+    expect(parseTitleDate("ОНОВЛЕНО о 18:52")).toBeNull();
   });
 
   it("monthGenitive — родовий відмінок", () => {

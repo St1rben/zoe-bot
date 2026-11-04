@@ -3,6 +3,8 @@ name: zoe-fetch
 # «Очі» бота: раз на ~5 хвилин завантажує www.zoe.com.ua/outage/ через Tor
 # з українським виходом (сайт відповідає лише українським мережам) і віддає
 # готовий HTML у Cloudflare-воркер (POST /ingest), який робить дедуп і розсилку.
+# Розклад часто запізнюється, тому основний режим — сторож у воркері, який
+# будить цей workflow_dispatch вже при тиші > 3 хвилин.
 #
 # Потрібен секрет репозиторію INGEST_TOKEN (Settings → Secrets and variables → Actions).
 
@@ -28,9 +30,19 @@ jobs:
       BROWSER_UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
     steps:
       - name: Встановити tor
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq tor tor-geoipdb
+          sudo apt-get install -y -qq --no-install-recommends tor tor-geoipdb
+
+      # Збережені guard-вузли та консенсус роблять bootstrap Tor швидким
+      # (секунди замість 1–5 хв) — це основна внутрішня затримка фетча.
+      - name: Кеш tor-даних
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tor-data
+          key: tor-data-ua-v1
 
       - name: Підняти tor з українським виходом
         run: |

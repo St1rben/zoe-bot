@@ -11,6 +11,9 @@ QUEUE = "5.1"
 DIGEST_TIME = ""
 DIGEST_TZ = "Europe/Kyiv"
 DRY_RUN = "0"
+# Хто може змінювати черги (Telegram user ID, можна кілька через кому).
+# Порожньо — змінювати може будь-хто.
+ADMIN_IDS = "724390773"
 
 # Створіть namespace: npx wrangler kv namespace create STATE
 # і вставте отриманий id (або залиште як є для локальної розробки).

@@ -1,17 +1,26 @@
-/** Тексти повідомлень (HTML), один в один з Python-версією. */
+/** Тексти повідомлень (HTML). Базуються на Python-версії, розширені для наборів черг. */
 
 import {
   OUTAGE_URL,
   SCENARIO_ABSENT,
   SCENARIO_NO_SCHEDULE,
   SCENARIO_PRESENT,
+  sortQueues,
   type Scenario,
 } from "./parser";
+import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./telegram";
 
 export const COMMANDS_HELP =
-  "/status — поточний стан\n/queue 5.1 — змінити чергу для цього чату\n/help — ця довідка";
+  "/status — поточний стан\n" +
+  "/queue — обрати черги (кнопки)\n" +
+  "/queue add 3.1 6.2 — додати черги\n" +
+  "/queue remove 5.1 — прибрати черги\n" +
+  "/help — ця довідка";
 
 const SOURCE_LINE = `<a href="${OUTAGE_URL}">Джерело: zoe.com.ua</a>`;
+
+/** Одна пара «черга → її сценарій» для зведених повідомлень. */
+export type QueueScenarioEntry = readonly [string, Scenario];
 
 export function escapeHtml(value: string): string {
   return value
@@ -33,16 +42,18 @@ export function humanizeSeconds(seconds: number): string {
   return `${days} д ${hours % 24} год`;
 }
 
-export function formatStartup(queue: string): string {
-  return `🟢 <b>Бот запущено!</b>\n\nМоніторинг черги <b>${escapeHtml(queue)}</b> активний.`;
+export function formatStartup(queues: readonly string[]): string {
+  const label = queues.length === 1 ? "черги" : "черг";
+  const list = escapeHtml(queues.join(", "));
+  return `🟢 <b>Бот запущено!</b>\n\nМоніторинг ${label} <b>${list}</b> активний.`;
 }
 
-export function formatWelcome(queue: string): string {
+export function formatWelcome(queues: readonly string[]): string {
   return (
     "👋 <b>ZOE Outage Bot</b>\n\n" +
     "Слідкую за графіками погодинних відключень на zoe.com.ua " +
     "і пишу сюди, коли вони з'являються або змінюються.\n\n" +
-    `Ваша черга: <b>${escapeHtml(queue)}</b>\n\n` +
+    `Ваші черги: <b>${escapeHtml(queues.join(", "))}</b>\n\n` +
     COMMANDS_HELP
   );
 }
@@ -51,22 +62,25 @@ export function formatHelp(): string {
   return `📖 <b>Команди</b>\n\n${COMMANDS_HELP}`;
 }
 
-export function formatQueueCurrent(queue: string, isDefault: boolean): string {
-  const source = isDefault ? "значення за замовчуванням" : "обрано для цього чату";
-  return (
-    `⚙️ Поточна черга: <b>${escapeHtml(queue)}</b> (${source}).\n\n` +
-    "Змінити: <code>/queue 4.2</code>"
-  );
+/** Легаси-формат: замінити весь набір черг новим списком. */
+export function formatQueuesSet(queues: readonly string[]): string {
+  if (queues.length === 1) {
+    return `✅ Відстежувана черга: <b>${escapeHtml(queues[0] ?? "")}</b>.`;
+  }
+  return `✅ Відстежувані черги: <b>${escapeHtml(queues.join(", "))}</b>.`;
 }
 
-export function formatQueueSet(queue: string): string {
-  return `✅ Чергу змінено на <b>${escapeHtml(queue)}</b>. Наступні оновлення — для неї.`;
+export function formatQueueIsDefault(queue: string): string {
+  return (
+    `⚠️ Черга <b>${escapeHtml(queue)}</b> — за замовчуванням, поки інших черг немає.\n` +
+    `Спершу додайте інші черги, потім цю можна прибрати.`
+  );
 }
 
 export function formatQueueInvalid(raw: string): string {
   return (
     `⚠️ «${escapeHtml(raw)}» не схоже на номер черги.\n` +
-    "Приклади: <code>/queue 5.1</code>, <code>/queue 3</code>"
+    "Приклади: <code>/queue add 5.1 4.2</code>, <code>/queue 3</code>"
   );
 }
 
@@ -83,52 +97,158 @@ function scenarioLine(queue: string, scenario: Scenario): string {
   return `Черга ${escapeHtml(queue)} у графіку відсутня — світло не відключатимуть 🎉`;
 }
 
-export function formatUpdate(title: string, queue: string, scenario: Scenario): string {
-  const icon =
-    scenario.kind === SCENARIO_NO_SCHEDULE
-      ? "☀️"
-      : scenario.kind === SCENARIO_PRESENT
-        ? "⚡"
-        : "✅";
+function scenarioLines(entries: readonly QueueScenarioEntry[]): string {
+  return entries.map(([queue, scenario]) => scenarioLine(queue, scenario)).join("\n");
+}
+
+function updateIcon(entries: readonly QueueScenarioEntry[]): string {
+  if (entries.length === 0) return "⚡";
+  if (entries.some(([, scenario]) => scenario.kind === SCENARIO_PRESENT)) return "⚡";
+  if (entries.every(([, scenario]) => scenario.kind === SCENARIO_ABSENT)) return "✅";
+  return "☀️";
+}
+
+export function formatMultiUpdate(title: string, entries: readonly QueueScenarioEntry[]): string {
   return (
-    `${icon} <b>${escapeHtml(title)}</b>\n\n` +
-    `${scenarioLine(queue, scenario)}\n\n` +
+    `${updateIcon(entries)} <b>${escapeHtml(title)}</b>\n\n` +
+    `${scenarioLines(entries)}\n\n` +
     SOURCE_LINE
   );
 }
 
-export function formatUnchangedUpdate(title: string, queue: string, scenario: Scenario): string {
+export function formatMultiUnchangedUpdate(
+  title: string,
+  entries: readonly QueueScenarioEntry[],
+): string {
   return (
     `🔄 <b>${escapeHtml(title)}</b>\n\n` +
-    `Графіки було оновлено, але для нашої черги все так само без змін 👌\n\n` +
-    `${scenarioLine(queue, scenario)}\n\n` +
+    "Графіки було оновлено, але для ваших черг усе без змін 👌\n\n" +
+    `${scenarioLines(entries)}\n\n` +
     SOURCE_LINE
   );
 }
 
-export function formatDigest(title: string, queue: string, scenario: Scenario): string {
+export function formatMultiDigest(title: string, entries: readonly QueueScenarioEntry[]): string {
   return (
-    "🌙 <b>Нагадування про графік</b>\n\n" + `${escapeHtml(title)}\n` + scenarioLine(queue, scenario)
+    "🌙 <b>Нагадування про графік</b>\n\n" +
+    `${escapeHtml(title)}\n` +
+    scenarioLines(entries)
+  );
+}
+
+/**
+ * Повідомлення вибору черг: поточний набір + сценарії (якщо дані відомі) + легенда.
+ * Клавіатуру будує queuePickerKeyboard.
+ */
+export function formatQueuesMessage(options: {
+  queues: readonly string[];
+  isDefault: boolean;
+  entries: readonly QueueScenarioEntry[] | null;
+}): string {
+  const lines = ["⚙️ <b>Черги цього чату</b>", ""];
+  lines.push(
+    options.isDefault
+      ? `Зараз — черга за замовчуванням: <b>${escapeHtml(options.queues.join(", "))}</b>`
+      : `Відстежуються: <b>${escapeHtml(options.queues.join(", "))}</b>`,
+  );
+  if (options.entries !== null) {
+    lines.push("", scenarioLines(options.entries));
+  }
+  lines.push(
+    "",
+    "Тапніть кнопку, щоб додати або прибрати чергу (✅ — відстежується).",
+    "Команди: <code>/queue add 3.1 6.2</code> · <code>/queue remove 5.1</code>",
+  );
+  return lines.join("\n");
+}
+
+/**
+ * Інлайн-клавіатура вибору черг: усі відомі черги по 3 в ряду,
+ * відстежувані — з ✅, тап перемикає (callback_data «qt:N.N»).
+ */
+export function queuePickerKeyboard(
+  tracked: readonly string[],
+  known: readonly string[],
+): InlineKeyboardMarkup {
+  const trackedSet = new Set(tracked);
+  const grid = sortQueues([...tracked, ...known]);
+  const columns = 3;
+  const rows: InlineKeyboardButton[][] = [];
+  for (let index = 0; index < grid.length; index += columns) {
+    rows.push(
+      grid.slice(index, index + columns).map((queue) => ({
+        text: trackedSet.has(queue) ? `✅ ${queue}` : queue,
+        callback_data: `qt:${queue}`,
+      })),
+    );
+  }
+  return { inline_keyboard: rows };
+}
+
+export function formatQueuesAdded(added: readonly string[]): string {
+  const label = added.length === 1 ? "чергу" : "черги";
+  return `✅ Додано ${label}: <b>${escapeHtml(added.join(", "))}</b>.`;
+}
+
+export function formatQueuesRemoved(removed: readonly string[]): string {
+  const label = removed.length === 1 ? "чергу" : "черги";
+  return `🗑 Прибрано ${label}: <b>${escapeHtml(removed.join(", "))}</b>.`;
+}
+
+export function formatQueuesAlreadyTracked(queues: readonly string[]): string {
+  return `⚠️ Ці черги вже відстежуються: <b>${escapeHtml(queues.join(", "))}</b>.`;
+}
+
+export function formatQueuesNotTracked(queues: readonly string[]): string {
+  return `⚠️ Ці черги не відстежуються — прибирати нічого: <b>${escapeHtml(queues.join(", "))}</b>.`;
+}
+
+export function formatQueuesResetToDefault(defaultQueue: string): string {
+  return `Тепер відстежується черга за замовчуванням: <b>${escapeHtml(defaultQueue)}</b>.`;
+}
+
+export function formatQueueLimit(limit: number): string {
+  return `⚠️ Максимум ${limit} черг на чат. Спершу приберіть зайві: <code>/queue remove …</code>`;
+}
+
+export function formatQueueForbidden(): string {
+  return "⛔️ Змінювати черги може лише адміністратор бота.";
+}
+
+/** Службовий алерт адміну: сторінка/пости не схожі на графік кілька перевірок підряд. */
+export function formatParseAlert(postsCount: number, streak: number): string {
+  const detail =
+    postsCount === 0
+      ? "Сторінка не містила жодної статті або не розпарсилась"
+      : `Знайдено статей: ${postsCount}, але жодна не схожа на графік для населення`;
+  return (
+    "⚠️ <b>Проблема з розбором графіків</b>\n\n" +
+    `${detail}.\n` +
+    `Серія: <b>${streak}</b> перевірок підряд (~${humanizeSeconds(streak * 300)}). ` +
+    "Можливо, zoe.com.ua змінив формат публікації.\n\n" +
+    "Сповіщення про відключення можуть затримуватися, доки формат не відновиться."
   );
 }
 
 export function formatStatus(options: {
-  queue: string;
-  title: string | null;
-  scenario: Scenario | null;
+  queues: readonly string[];
+  entries: readonly QueueScenarioEntry[] | null;
   updatedAt: number | null;
   /** Попередження, якщо найсвіжіший пост не за сьогодні (див. stalePostNote). */
   staleNote?: string | null;
   /** Час останньої успішної перевірки сайту (meta.lastIngestAt) — доказ, що моніторинг живий. */
   checkedAt?: number | null;
 }): string {
-  const lines = ["📊 <b>Статус бота</b>", "", `Черга: <b>${escapeHtml(options.queue)}</b>`];
+  const lines = [
+    "📊 <b>Статус бота</b>",
+    "",
+    `Черги: <b>${escapeHtml(options.queues.join(", "))}</b>`,
+  ];
   if (options.staleNote) lines.push(options.staleNote);
-  if (options.title) lines.push(`Останній пост: ${escapeHtml(options.title)}`);
-  if (options.scenario === null) {
-    lines.push("Стан черги: ⏳ даних ще немає");
+  if (options.entries === null) {
+    lines.push("Стан черг: ⏳ даних ще немає");
   } else {
-    lines.push(`Стан черги: ${scenarioLine(options.queue, options.scenario)}`);
+    lines.push(scenarioLines(options.entries));
   }
   if (options.updatedAt !== null) {
     const age = (Date.now() - options.updatedAt) / 1000;

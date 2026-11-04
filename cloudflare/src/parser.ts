@@ -28,12 +28,62 @@ export interface OutagePost {
   queues: Record<string, string>;
 }
 
-const NO_SCHEDULE_MARKERS = ["НЕ ЗАПЛАНОВАНІ", "НЕ ПЛАНУЮТЬСЯ"];
+const NO_SCHEDULE_MARKERS = [
+  "НЕ ЗАПЛАНОВАНІ",
+  "НЕ ПЛАНУЮТЬСЯ",
+  "НЕ ЗАСТОСОВУЮТЬСЯ",
+  "НЕ ДІЮТЬ",
+];
 // Пости «до уваги промисловості та бізнесу» не стосуються населення
-const BUSINESS_TITLE_MARKERS = ["ПРОМИСЛОВОСТ", "БІЗНЕС"];
-const BUSINESS_TEXT_MARKERS = ["НЕ СТОСУЮТЬСЯ НАСЕЛЕННЯ"];
+const BUSINESS_TITLE_MARKERS = ["ПРОМИСЛОВОСТ", "БІЗНЕС", "ЮРИДИЧНИХ ОСІБ", "ПІДПРИЄМСТВ"];
+const BUSINESS_TEXT_MARKERS = ["НЕ СТОСУЮТЬСЯ НАСЕЛЕННЯ", "НЕ СТОСУЮТЬСЯ ПОБУТОВИХ"];
 
-const QUEUE_LINE_RE = /^(\d+(?:\.\d+)?)\s*:\s*(.+)$/;
+/**
+ * Вікно відключень: «08:00 - 10:00», «08.00–10.00», «з 08:00 до 10:00»,
+ * години з однією цифрою. Розділювач — будь-яке тире або слово «до».
+ */
+const TIME_RANGE_RE = /(\d{1,2})[:.](\d{2})\s*(?:[–—−-]|до)\s*(\d{1,2})[:.](\d{2})/g;
+
+/** Номер черги в рядку: «5.1», «5,1» або ціла черга «3». */
+const QUEUE_ID_RE = /(\d{1,2}(?:[.,]\d{1,2})?)/g;
+
+/** Максимум черг, які можна відстежувати в одному чаті (сетка ZOE — 12 черг). */
+export const MAX_QUEUES_PER_CHAT = 12;
+
+/**
+ * Базовий набір черг для кнопок вибору (реальна сторінка ZOE: 1.1–6.2).
+ * Динамічно розширюється чергами з постів (meta.knownQueues), тож якщо
+ * оператор додаси нову чергу — вона з'явиться в кнопках автоматично.
+ */
+export const SEED_QUEUES: readonly string[] = [
+  "1.1",
+  "1.2",
+  "2.1",
+  "2.2",
+  "3.1",
+  "3.2",
+  "4.1",
+  "4.2",
+  "5.1",
+  "5.2",
+  "6.1",
+  "6.2",
+];
+
+/** Числове сортування черг («5.2» < «10.1», «3» < «3.1») + дедуплікація. */
+export function sortQueues(queues: Iterable<string>): string[] {
+  const unique = Array.from(new Set(queues));
+  return unique.sort((a, b) => {
+    const partsA = a.split(".").map(Number);
+    const partsB = b.split(".").map(Number);
+    for (let index = 0; index < Math.max(partsA.length, partsB.length); index += 1) {
+      const left = partsA[index] ?? 0;
+      const right = partsB[index] ?? 0;
+      if (left !== right) return left - right;
+    }
+    return 0;
+  });
+}
 
 const NAMED_ENTITIES: Record<string, string> = {
   amp: "&",
@@ -82,18 +132,72 @@ export function isBusinessPost(post: OutagePost): boolean {
   );
 }
 
+/**
+ * Чи є в поста ознаки актуального графика: рядки черг з часом або
+ * маркер «графіки не заплановані». Пости без ознак не надсилаються
+ * користувачам — інакше зміна вёрстки виглядала б як «черги відсутні».
+ */
+export function hasScheduleSignals(post: OutagePost): boolean {
+  return Object.keys(post.queues).length > 0 || hasNoSchedule(post.text);
+}
+
+/** Нормалізує номер черги: кома → крапка, без пробілів («5, 1» → «5.1»). */
+function normalizeQueueId(raw: string): string {
+  return raw.replace(/[,\s]+/g, (match) => (match.includes(",") ? "." : "")).trim();
+}
+
+function pad2(value: string): string {
+  return value.length < 2 ? `0${value}` : value;
+}
+
+/** Відновлює вікно в канонічному вигляді «HH:MM - HH:MM» (null — сміття). */
+function normalizeWindow(match: RegExpMatchArray): string | null {
+  const [, h1, m1, h2, m2] = match;
+  if (h1 === undefined || m1 === undefined || h2 === undefined || m2 === undefined) return null;
+  const minutes = Number(m1);
+  if (minutes > 59 || Number(m2) > 59) return null;
+  return `${pad2(h1)}:${m1} - ${pad2(h2)}:${m2}`;
+}
+
+/**
+ * Витягує черги з тексту поста, толерантно до варіантів оформлення:
+ * - префікси: «Черга 5.1:», «• 5.1 —», звичайний «5.1:»;
+ * - «5,1» (кома) та цілі номери «3»;
+ * - час «08:00» чи «08.00», будь-які тире, «з 08:00 до 10:00»;
+ * - перенос частини вікон на наступний рядок (без номера черги —
+ *   продовжує попередню, якщо рядок короткий).
+ * Рядки без жодного вікна часу ігноруються.
+ */
 export function parseQueueLines(text: string): Record<string, string> {
   const queues: Record<string, string> = {};
+  let lastQueue: string | null = null;
+
   for (const rawLine of text.split(/\r?\n/)) {
-    const match = QUEUE_LINE_RE.exec(rawLine.trim());
-    if (match === null) continue;
-    const queue = match[1] as string;
-    // На реальній сторінці трапляються тире – (U+2013) та — (U+2014): уніфікуємо
-    const times = (match[2] as string)
-      .replace(/\s+/g, " ")
-      .replace(/[–—]/g, "-")
-      .trim();
-    if (!(queue in queues)) queues[queue] = times;
+    const line = rawLine.trim();
+    if (line === "") continue;
+
+    const ranges = [...line.matchAll(TIME_RANGE_RE)];
+    if (ranges.length === 0) continue;
+
+    const windows = ranges
+      .map((match) => normalizeWindow(match))
+      .filter((window): window is string => window !== null)
+      .join(", ");
+    if (windows === "") continue;
+
+    const firstIndex = ranges[0]?.index ?? 0;
+    const prefix = line.slice(0, firstIndex);
+    const idMatches = [...prefix.matchAll(QUEUE_ID_RE)];
+    const lastId = idMatches.at(-1)?.[1];
+
+    if (lastId !== undefined) {
+      const queue = normalizeQueueId(lastId);
+      if (!(queue in queues)) queues[queue] = windows;
+      lastQueue = queue;
+    } else if (lastQueue !== null && /^[\d:.,\s–—-]*$/.test(prefix.trim())) {
+      // Рядок-продовження: лише час (можливо з часткою номера), тексту немає
+      queues[lastQueue] = `${queues[lastQueue] ?? ""}, ${windows}`.replace(/^, /, "");
+    }
   }
   return queues;
 }
@@ -128,6 +232,13 @@ export function parseTitleDate(title: string): { day: number; month: number } | 
     if (monthName === undefined) continue;
     const match = new RegExp(`(\\d{1,2})\\s+${monthName}`).exec(lowered);
     if (match !== null) return { day: Number(match[1] as string), month: index + 1 };
+  }
+  // Числовий фолбек: «17.10», «17.10.2026», «17/10»
+  const numeric = /(\d{1,2})[./](\d{1,2})(?:[./]\d{2,4})?/.exec(lowered);
+  if (numeric !== null) {
+    const day = Number(numeric[1]);
+    const month = Number(numeric[2]);
+    if (day >= 1 && day <= 31 && month >= 1 && month <= 12) return { day, month };
   }
   return null;
 }
@@ -179,7 +290,10 @@ export function isScheduleUpdate(
 interface ArticleDraft {
   id: string;
   title: string;
+  /** Текст із .content — основний шлях. */
   text: string;
+  /** Увесь текст статті — фолбек, якщо клас .content зникне. */
+  articleText: string;
 }
 
 /**
@@ -201,11 +315,15 @@ export async function parsePage(html: string): Promise<OutagePost[]> {
   const rewriter = new HTMLRewriter()
     .on("article", {
       element(el) {
-        state.current = { id: el.getAttribute("id") ?? "", title: "", text: "" };
+        state.current = { id: el.getAttribute("id") ?? "", title: "", text: "", articleText: "" };
         el.onEndTag(() => {
           if (state.current !== null) state.drafts.push(state.current);
           state.current = null;
         });
+      },
+      // Фолбек-текст: усе, що є всередині статті (включно з h2 і content)
+      text(chunk) {
+        if (state.current !== null) state.current.articleText += chunk.text;
       },
     })
     .on("h2", {
@@ -245,13 +363,23 @@ export async function parsePage(html: string): Promise<OutagePost[]> {
 
   await rewriter.transform(new Response(html)).text();
 
-  return state.drafts
-    .filter((draft) => draft.id !== "")
-    .map((draft) => {
-      const text = normalizeText(decodeHtmlEntities(draft.text));
-      const title = decodeHtmlEntities(draft.title.trim());
-      return { id: draft.id, title, text, queues: parseQueueLines(text) };
-    });
+  return state.drafts.map((draft, index) => {
+    const title = decodeHtmlEntities(draft.title.trim());
+    // Основний текст — із .content; якщо контейнер зник (зміна вёрстки) —
+    // беремо весь текст статті, прибравши рядок заголовка
+    const rawText =
+      normalizeText(draft.text) !== "" ? draft.text : fallbackArticleText(draft.articleText, title);
+    const text = normalizeText(decodeHtmlEntities(rawText));
+    // Статті без id (зміна вёрстки) — синтетичний стабільний за порядком id
+    const id = draft.id !== "" ? draft.id : `post-auto-${index + 1}`;
+    return { id, title, text, queues: parseQueueLines(text) };
+  });
+}
+
+/** Весь текст статті без рядка заголовка — фолбек, коли .content недоступний. */
+function fallbackArticleText(articleText: string, title: string): string {
+  const lines = articleText.split("\n").map((line) => line.trim());
+  return lines.filter((line) => line !== "" && line !== title).join("\n");
 }
 
 /** Прибирає порожні рядки та зайві пробіли (аналог strip=True у Python). */

@@ -1,7 +1,7 @@
 import { env, exports } from "cloudflare:workers";
 import { reset } from "cloudflare:test";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getMeta, setChatQueue } from "../src/state";
+import { getMeta, setChatQueues } from "../src/state";
 import { BUSINESS_ARTICLE_HTML, MIXED_PAGE_HTML, SAMPLE_HTML_UPDATED } from "./fixtures";
 import { installNetworkStub } from "./helpers";
 
@@ -42,7 +42,7 @@ describe("POST /ingest", () => {
 
   it("перший ingest: вітання + оновлення, метадані записано", async () => {
     const net = installNetworkStub({ page: "" });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
 
     const response = await ingest(padded(MIXED_PAGE_HTML));
     expect(response.status).toBe(200);
@@ -64,7 +64,7 @@ describe("POST /ingest", () => {
 
   it("той самий HTML удруге — skipped unchanged без дублів", async () => {
     const net = installNetworkStub({ page: "" });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     await ingest(padded(MIXED_PAGE_HTML));
     expect(net.telegramCalls).toHaveLength(2);
 
@@ -77,7 +77,7 @@ describe("POST /ingest", () => {
 
   it("оновлений HTML — нове повідомлення", async () => {
     const net = installNetworkStub({ page: "" });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     await ingest(padded(MIXED_PAGE_HTML));
     await ingest(padded(SAMPLE_HTML_UPDATED));
     expect(net.telegramCalls).toHaveLength(3);
@@ -86,7 +86,7 @@ describe("POST /ingest", () => {
 
   it("лише бізнес-пости — no_consumer_post, без повідомлень", async () => {
     const net = installNetworkStub({ page: "" });
-    await setChatQueue(env, CHAT_ID, null);
+    await setChatQueues(env, CHAT_ID, null);
     const response = await ingest(padded(BUSINESS_ARTICLE_HTML));
     const body = await response.json<{ skipped?: string }>();
     expect(body.skipped).toBe("no_consumer_post");
