@@ -183,8 +183,62 @@ describe("runCheck", () => {
     expect(net.telegramCalls[1]!.text).toContain("для ваших черг усе без змін");
 
     const state = await getChatState(env, CHAT_ID);
-    expect(state?.queues["5.1"]?.kind).toBe("present");
-    expect(state?.queues["5.1"]?.times).toBe("08:00 - 10:00, 16:00 - 20:00");
+    expect(state?.posts["post-1234"]?.queues["5.1"]?.kind).toBe("present");
+    expect(state?.posts["post-1234"]?.queues["5.1"]?.times).toBe("08:00 - 10:00, 16:00 - 20:00");
+  });
+
+  it("правка нижнього поста не втрачається, коли зверху з'явився новий (кейс 8→9 листопада)", async () => {
+    const day8v1 = `
+<html><body>
+<article id="post-8000">
+  <h2>ГПВ НА 8 ЛИСТОПАДА ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ</h2>
+  <div class="content">
+    <p>5.1: 08:00 - 10:00</p>
+  </div>
+</article>
+</body></html>`;
+    const day8v2 = `
+<article id="post-8000">
+  <h2>ОНОВЛЕНО ГПВ НА 8 ЛИСТОПАДА ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ (оновлено 21:59)</h2>
+  <div class="content">
+    <p>5.1: 12:00 - 14:00</p>
+  </div>
+</article>`;
+    const day9 = `
+<article id="post-9000">
+  <h2>9 ЛИСТОПАДА ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ ДІЯТИМУТЬ ГПВ</h2>
+  <div class="content">
+    <p>5.1: 16:00 - 18:00</p>
+  </div>
+</article>`;
+    const page = { html: day8v1 };
+    const net = installNetworkStub({ page: () => page.html });
+    await setChatQueues(env, CHAT_ID, null);
+
+    // крок 1: звичайний графік на 8-те — доставлено
+    await runCheck(env);
+    expect(net.telegramCalls).toHaveLength(2);
+    expect(net.telegramCalls[1]!.text).toContain("Черга 5.1: 08:00 - 10:00");
+
+    // крок 2: правку 8-го (21:59) і новий пост 9-го опублікували між
+    // перевірками — 9-й стоїть зверху, правка 8-го під ним.
+    // Обидва мають дійти.
+    page.html = `<html><body>${day9}${day8v2}</body></html>`;
+    const summary = await runCheck(env);
+    expect(summary.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls).toHaveLength(4);
+
+    const ninth = net.telegramCalls[2]!;
+    const eighth = net.telegramCalls[3]!;
+    expect(ninth.text).toContain("9 ЛИСТОПАДА");
+    expect(ninth.text).toContain("Черга 5.1: 16:00 - 18:00");
+    expect(eighth.text).toContain("ОНОВЛЕНО ГПВ НА 8 ЛИСТОПАДА");
+    expect(eighth.text).toContain("Черга 5.1: 12:00 - 14:00");
+
+    // крок 3: та сама сторінка ще раз — без дублів
+    const again = await runCheck(env);
+    expect(again.sentTo).toEqual([]);
+    expect(net.telegramCalls).toHaveLength(4);
   });
 
   it("knownQueues накопичує черги з постів", async () => {

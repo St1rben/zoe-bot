@@ -15,7 +15,6 @@ import {
   hasNoSchedule,
   hasScheduleSignals,
   isBusinessPost,
-  isScheduleUpdate,
   monthGenitive,
   OUTAGE_URL,
   parsePage,
@@ -32,6 +31,7 @@ import {
   putChatState,
   putMeta,
   queuesOr,
+  type ChatPostState,
   type Meta,
   type QueueScenario,
 } from "./state";
@@ -151,6 +151,15 @@ export async function contentSignature(post: OutagePost): Promise<string> {
 }
 
 /**
+ * Скільки свіжих постів для населення відстежуємо одночасно: новітній +
+ * до двох попередніх. Бо правка вчерашнього/сьогоднішнього поста, що стоїть
+ * ПІД новішим на сайті, інакше ніколи не потрапляє в поле зору (кейс:
+ * «ОНОВЛЕНО ГПВ НА 8 ЛИСТОПАДА» опублікували о 21:59, а о 22:00 зверху
+ * з'явився пост про 9-те — і правка восьмого губилася назавжди).
+ */
+const MAX_TRACKED_POSTS = 3;
+
+/**
  * Обробка вже завантаженої сторінки: джерело — cron (fetch із Cloudflare)
  * або /ingest (HTML, який приніс маячок із українського хостингу).
  */
@@ -171,11 +180,12 @@ export async function processHtml(
   // Ворота безпеки: надсилаємо лише пости з ознаками графика (рядки черг
   // або «не заплановані»). Без цього зміна вёрстки розсилає всім фальшиве
   // «черги відсутні — світло не відключатимуть».
-  const post = posts.find(
-    (candidate) => !isBusinessPost(candidate) && hasScheduleSignals(candidate),
-  );
-  if (post === undefined) {
-    console.warn(`Немає поста для населення з ознаками графика (статей: ${posts.length})`);
+  const consumerPosts = posts
+    .filter((candidate) => !isBusinessPost(candidate) && hasScheduleSignals(candidate))
+    .slice(0, MAX_TRACKED_POSTS);
+  const [primary] = consumerPosts;
+  if (primary === undefined) {
+    console.warn(`Немає постів для населення з ознаками графика (статей: ${posts.length})`);
     await handleParseFailure(env, posts.length);
     return { ok: true, sentTo: [], skipped: "no_consumer_post" };
   }
@@ -184,7 +194,7 @@ export async function processHtml(
   let meta = await getMeta(env);
   let metaDirty = false;
 
-  // Мітка живості маячка: пишемо не частіше ніж раз на 5 хв (KV: 1 тис. записів/добу)
+  // Мітка живості маячка: пишемо не частіше ніж раз на 2 хв (KV: 1 тис. записів/добу)
   const lastIngestAt = meta.lastIngestAt ?? null;
   if (source === "ingest" && (lastIngestAt === null || now - lastIngestAt > INGEST_HEARTBEAT_MS)) {
     meta.lastIngestAt = now;
@@ -197,72 +207,114 @@ export async function processHtml(
     metaDirty = true;
   }
 
-  const signature = await contentSignature(post);
-  if (meta.lastPostId !== null && meta.lastPostSig === signature) {
-    // Пост не змінювався — не перебираємо чати, лише дайджест і «бейкон» маячка.
-    const digestSent = await sendDigestIfDue(env, post, new Date(now), meta);
+  // Сигнатури всіх відстежуваних постів — правки бачимо навіть під новішим
+  const sigs = new Map<string, string>();
+  for (const post of consumerPosts) {
+    sigs.set(post.id, await contentSignature(post));
+  }
+
+  // Відомі сигнатури: у міграції з v1.8.1 сіється з lastPostSig, щоб
+  // перший інгест після деплою не дав ложного «оновлено, без змін»
+  const knownSigs: Record<string, string> =
+    meta.recentSigs ??
+    (meta.lastPostId !== null && meta.lastPostSig !== null
+      ? { [meta.lastPostId]: meta.lastPostSig }
+      : {});
+  const changedPosts = consumerPosts.filter(
+    (post) => knownSigs[post.id] !== sigs.get(post.id),
+  );
+
+  if (meta.lastPostId !== null && changedPosts.length === 0) {
+    // Контент усіх постів не змінювався — не перебираємо чати, лише дайджест і «бейкон».
+    const digestSent = await sendDigestIfDue(env, primary, new Date(now), meta);
     if (metaDirty && !digestSent) await putMeta(env, meta);
-    return { ok: true, postId: post.id, title: post.title, sentTo: [], skipped: "unchanged" };
+    return { ok: true, postId: primary.id, title: primary.title, sentTo: [], skipped: "unchanged" };
   }
 
   const chats = await listChats(env);
   const sentTo: number[] = [];
+  const isFirstRun = meta.lastPostId === null;
 
-  if (meta.lastPostId === null) {
+  if (isFirstRun) {
     // Перший запуск після деплою (KV порожній) — вітання, як у Python-версії
     for (const chat of chats) {
       await sendMessage(env, chat.chatId, formatStartup(queuesOr(env.QUEUE, chat.queues)));
     }
   }
 
-  const defaultQueue: string = env.QUEUE;
-  const isUpdate = isScheduleUpdate(meta.lastPostId, meta.lastPostTitle, post);
-
   for (const chat of chats) {
-    const queues = queuesOr(defaultQueue, chat.queues);
-    const entries: (readonly [string, Scenario])[] = queues.map((queue) => [
-      queue,
-      scenarioFor(post, queue),
-    ]);
+    const queues = queuesOr(env.QUEUE, chat.queues);
     const previous = await getChatState(env, chat.chatId);
-    const scenarioMap = scenarioMapFromEntries(entries);
+    const postsState: Record<string, ChatPostState> = { ...(previous?.posts ?? {}) };
+    let chatDirty = false;
 
-    const isSameSchedule = previous !== null && sameScenarioMap(previous.queues, scenarioMap);
-    const isChatUpdate = isUpdate || (previous !== null && previous.postId === post.id);
+    for (const post of changedPosts) {
+      const entries: (readonly [string, Scenario])[] = queues.map((queue) => [
+        queue,
+        scenarioFor(post, queue),
+      ]);
+      const scenarioMap = scenarioMapFromEntries(entries);
+      const prevPost = postsState[post.id];
 
-    let messageText: string;
-    if (previous !== null && isChatUpdate && isSameSchedule) {
-      messageText = formatMultiUnchangedUpdate(post.title, entries);
-    } else if (isSameSchedule && previous !== null && previous.postId === post.id) {
-      continue;
-    } else {
-      messageText = formatMultiUpdate(post.title, entries);
+      let messageText: string | null = null;
+      if (prevPost !== undefined) {
+        // Правка поста, який ми вже надсилали
+        messageText = sameScenarioMap(prevPost.queues, scenarioMap)
+          ? formatMultiUnchangedUpdate(post.title, entries)
+          : formatMultiUpdate(post.title, entries);
+      } else if (isFirstRun && post.id === primary.id) {
+        // Перший запуск: вітання вже пішло, показуємо новітній пост
+        messageText = formatMultiUpdate(post.title, entries);
+      } else if (
+        !isFirstRun &&
+        (post.id === primary.id || knownSigs[post.id] !== undefined)
+      ) {
+        // Новий верхній пост — або правка поста, що був у трекінгу, але
+        // ще не доставлявся (приглушений на першому запуску)
+        messageText = formatMultiUpdate(post.title, entries);
+      }
+      // Інакше пост уперше потрапив у трекінг нижче верхнього — тихо реєструємо
+
+      if (messageText !== null && (await sendMessage(env, chat.chatId, messageText))) {
+        postsState[post.id] = { queues: scenarioMap };
+        chatDirty = true;
+        if (!sentTo.includes(chat.chatId)) sentTo.push(chat.chatId);
+      }
     }
 
-    if (await sendMessage(env, chat.chatId, messageText)) {
-      await putChatState(env, chat.chatId, {
-        postId: post.id,
-        queues: scenarioMap,
-        updatedAt: Date.now(),
-      });
-      sentTo.push(chat.chatId);
+    // Тримаємо стан лише для постів, які ще відстежуються
+    for (const key of Object.keys(postsState)) {
+      if (!consumerPosts.some((p) => p.id === key)) delete postsState[key];
+    }
+
+    if (chatDirty) {
+      await putChatState(env, chat.chatId, { posts: postsState, updatedAt: Date.now() });
     }
   }
 
-  // Контент змінився — фіксуємо метадані (навіть якщо postId той самий: правки в тому ж пості).
+  // Контент змінився (хоча б одного з відстежуваних постів) — фіксуємо метадані
+  const recentSigs: Record<string, string> = {};
+  for (const post of consumerPosts) {
+    const sig = sigs.get(post.id);
+    if (sig !== undefined) recentSigs[post.id] = sig;
+  }
   meta = {
     ...meta,
-    lastPostId: post.id,
-    lastPostTitle: post.title,
-    lastPostText: post.text,
+    lastPostId: primary.id,
+    lastPostTitle: primary.title,
+    lastPostText: primary.text,
     updatedAt: now,
-    lastPostSig: signature,
-    knownQueues: sortQueues([...(meta.knownQueues ?? []), ...Object.keys(post.queues)]),
+    lastPostSig: sigs.get(primary.id) ?? null,
+    knownQueues: sortQueues([
+      ...(meta.knownQueues ?? []),
+      ...consumerPosts.flatMap((post) => Object.keys(post.queues)),
+    ]),
+    recentSigs,
   };
-  const digestSent = await sendDigestIfDue(env, post, new Date(now), meta);
+  const digestSent = await sendDigestIfDue(env, primary, new Date(now), meta);
   if (!digestSent) await putMeta(env, meta);
 
-  return { ok: true, postId: post.id, title: post.title, sentTo };
+  return { ok: true, postId: primary.id, title: primary.title, sentTo };
 }
 
 /**

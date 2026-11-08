@@ -146,8 +146,7 @@ async function handleBotMembership(env: Env, event: TelegramChatMemberUpdated): 
     const queues = queuesOr(env.QUEUE, await getChatQueues(env, chatId));
     const entries = queues.map((queue) => [queue, scenarioFor(post, queue)] as const);
     await putChatState(env, chatId, {
-      postId: post.id,
-      queues: scenarioMapFromEntries(entries),
+      posts: { [post.id]: { queues: scenarioMapFromEntries(entries) } },
       updatedAt: Date.now(),
     });
   }
@@ -394,8 +393,7 @@ async function sendCurrentSchedule(
   ]);
   if (await sendMessage(env, chatId, formatMultiUpdate(post.title, entries))) {
     await putChatState(env, chatId, {
-      postId: post.id,
-      queues: scenarioMapFromEntries(entries),
+      posts: { [post.id]: { queues: scenarioMapFromEntries(entries) } },
       updatedAt: Date.now(),
     });
   }
@@ -411,10 +409,13 @@ async function handleStatus(env: Env, chatId: number): Promise<void> {
   const post = postFromMeta(meta);
   if (post !== null) {
     entries = queues.map((queue) => [queue, scenarioFor(post, queue)] as const);
-  } else if (chatState !== null) {
-    entries = Object.entries(chatState.queues).map(
-      ([queue, scenario]) => [queue, { kind: scenario.kind, times: scenario.times }] as const,
-    );
+  } else if (chatState !== null && meta.lastPostId !== null) {
+    const postState = chatState.posts[meta.lastPostId];
+    if (postState !== undefined) {
+      entries = Object.entries(postState.queues).map(
+        ([queue, scenario]) => [queue, { kind: scenario.kind, times: scenario.times }] as const,
+      );
+    }
   }
   const staleNote = stalePostNote(meta.lastPostTitle, new Date(), env.DIGEST_TZ || "Europe/Kyiv");
 

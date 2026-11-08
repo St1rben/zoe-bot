@@ -32,11 +32,19 @@ export interface QueueScenario {
   times: string | null;
 }
 
-export interface ChatState {
-  postId: string;
-  /** Сценарій на кожну відстежувану чергу — дедуплікація за сукупністю. */
+/** Стан чату за один пост: які сценарії ми вже надсилали. */
+export interface ChatPostState {
   queues: Record<string, QueueScenario>;
+}
+
+export interface ChatState {
   updatedAt: number;
+  /**
+   * Надісланий стан за postId (останні ~3 пости). Правки поста, який
+   * стоїть НЕ першим на сайті (під новішим), теж мають дедуп — раніше
+   * зберігався лише один пост, і такі правки губилися.
+   */
+  posts: Record<string, ChatPostState>;
 }
 
 export interface Meta {
@@ -54,6 +62,8 @@ export interface Meta {
   lastDispatchAt?: number | null;
   /** Черги, зустрінуті в постах (для кнопок вибору — розширюють SEED_QUEUES). */
   knownQueues: string[] | null;
+  /** Сигнатури останніх ~3 постів для населення — щоб бачити правки постів під новішим. */
+  recentSigs?: Record<string, string>;
   /** Серія /ingest без ознак графика (зміна формату сайту) — для алерта адміну. */
   parseFailStreak?: number;
   /** Час останнього алерта про збій формату (не частіше ніж раз на 12 год). */
@@ -150,21 +160,29 @@ export async function setChatQueues(
 
 export async function getChatState(env: Env, chatId: number): Promise<ChatState | null> {
   const raw = await env.STATE.get<
-    ChatState & { queue?: string; scenario?: ScenarioKind; times?: string | null }
+    ChatState & {
+      postId?: string;
+      queue?: string;
+      scenario?: ScenarioKind;
+      times?: string | null;
+      queues?: Record<string, QueueScenario>;
+    }
   >(CHAT_STATE_PREFIX + chatId, "json");
   if (raw === null) return null;
-  if (raw.queues !== undefined) {
-    return { postId: raw.postId, queues: raw.queues, updatedAt: raw.updatedAt };
+  if (raw.posts !== undefined) {
+    return { updatedAt: raw.updatedAt, posts: raw.posts };
   }
-  // Міграція старого формату (одна черга на чат)
-  if (typeof raw.queue === "string" && raw.scenario !== undefined) {
-    return {
-      postId: raw.postId,
-      queues: { [raw.queue]: { kind: raw.scenario, times: raw.times ?? null } },
-      updatedAt: raw.updatedAt,
-    };
-  }
-  return null;
+  // Міграція v2 (один пост: {postId, queues}) і v1 ({postId, queue, scenario, times})
+  const postId = raw.postId;
+  if (postId === undefined) return null;
+  const queues =
+    raw.queues !== undefined
+      ? raw.queues
+      : typeof raw.queue === "string" && raw.scenario !== undefined
+        ? { [raw.queue]: { kind: raw.scenario, times: raw.times ?? null } }
+        : undefined;
+  if (queues === undefined) return null;
+  return { updatedAt: raw.updatedAt, posts: { [postId]: { queues } } };
 }
 
 export async function putChatState(env: Env, chatId: number, state: ChatState): Promise<void> {
