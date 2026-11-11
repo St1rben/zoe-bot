@@ -7,7 +7,11 @@
  *   cron * * * * * — сторож: якщо /ingest довго мовчить, будить zoe-fetch.yml
  */
 
-import { processAlarmIngest, type AlarmIngestPayload } from "./alarmMonitor";
+import {
+  checkAndWakeAlarmIfNeeded,
+  processAlarmIngest,
+  type AlarmIngestPayload,
+} from "./alarmMonitor";
 import { getAlarmMeta } from "./alarmState";
 import { handleUpdate } from "./commands";
 import { wakeFetchIfStale } from "./github";
@@ -72,6 +76,11 @@ export default {
       await wakeFetchIfStale(env);
     } catch (error) {
       console.error("scheduled wake failed:", error);
+    }
+    try {
+      await checkAndWakeAlarmIfNeeded(env);
+    } catch (error) {
+      console.error("scheduled alarm check failed:", error);
     }
   },
 } satisfies ExportedHandler<Env>;

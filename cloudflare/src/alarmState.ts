@@ -27,6 +27,8 @@ export interface AlarmMeta {
   activePosts: Record<string, ActiveAlarmPost>;
   /** Час останньої перевірки каналу */
   lastCheckAt: number | null;
+  /** Час останнього workflow_dispatch для zoe-alarm.yml */
+  lastDispatchAt?: number | null;
   updatedAt: number | null;
 }
 

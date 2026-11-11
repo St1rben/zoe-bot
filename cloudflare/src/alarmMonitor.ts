@@ -750,3 +750,98 @@ export async function handleAddressDeleteCallback(
     `🗑 Видалено: ${target.street}, ${target.house}`,
   );
 }
+
+const ALARM_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const ALARM_DISPATCH_GAP_MS = 3 * 60 * 1000;
+const ALARM_REPO = "St1rben/zoe-bot";
+const ALARM_WORKFLOW_FILE = "zoe-alarm.yml";
+
+/**
+ * Сторож для @zoe_alarm у воркерному cron: раз на 5 хв напряму перевіряє
+ * веб-прев'ю https://t.me/s/zoe_alarm. Реплаї про відновлення обробляє миттєво
+ * на боці воркера, а якщо вийшов новий файл ЗМЕМ_*.xlsx — будить zoe-alarm.yml.
+ */
+export async function checkAndWakeAlarmIfNeeded(env: Env): Promise<void> {
+  const meta = await getAlarmMeta(env);
+  if (meta.lastCheckAt === null && meta.processedPostIds.length === 0) {
+    return;
+  }
+
+  const now = Date.now();
+  if (now - (meta.lastCheckAt ?? 0) < ALARM_CHECK_INTERVAL_MS) {
+    return;
+  }
+
+  const response = await fetch("https://t.me/s/zoe_alarm", {
+    headers: {
+      "user-agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
+    },
+  });
+  if (!response.ok) return;
+
+  const html = await response.text();
+  if (!html.includes('data-post="zoe_alarm/')) return;
+
+  const processedSet = new Set(meta.processedPostIds);
+  const blocks = html.split('data-post="zoe_alarm/').slice(1);
+
+  const restoredReplies: IngestRestoredReply[] = [];
+  let hasNewZmemXlsx = false;
+
+  for (const block of blocks) {
+    const postId = (block.split('"', 1)[0] ?? "").trim();
+    if (!/^\d+$/.test(postId) || processedSet.has(postId)) continue;
+
+    const replyMatch =
+      /tgme_widget_message_reply[\s\S]*?href="https:\/\/t\.me\/zoe_alarm\/(\d+)"/.exec(block);
+    const replyToPostId = replyMatch !== null ? replyMatch[1] : null;
+
+    const docMatch = /tgme_widget_message_document_title[^>]*>([^<]+)</.exec(block);
+    const docTitle = docMatch !== null ? (docMatch[1] ?? "").trim() : null;
+
+    const textMatch = /js-message_text[^>]*>([\s\S]*?)<\/div>/.exec(block);
+    const rawText = textMatch !== null ? (textMatch[1] ?? "").replace(/<[^>]+>/g, " ") : "";
+    const text = rawText.replace(/\s+/g, " ").trim();
+
+    if (
+      replyToPostId &&
+      docTitle === null &&
+      /відновлено/i.test(text) &&
+      !/частково/i.test(text)
+    ) {
+      restoredReplies.push({ postId, replyToPostId, text });
+    } else if (docTitle !== null && /\.xlsx$/i.test(docTitle) && /змем/i.test(docTitle)) {
+      hasNewZmemXlsx = true;
+    }
+  }
+
+  if (restoredReplies.length > 0 || !hasNewZmemXlsx) {
+    await processAlarmIngest(env, { newPosts: [], restoredReplies });
+  }
+
+  if (
+    hasNewZmemXlsx &&
+    env.GITHUB_TOKEN &&
+    now - (meta.lastDispatchAt ?? 0) >= ALARM_DISPATCH_GAP_MS
+  ) {
+    const dispResp = await fetch(
+      `https://api.github.com/repos/${ALARM_REPO}/actions/workflows/${ALARM_WORKFLOW_FILE}/dispatches`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.GITHUB_TOKEN}`,
+          accept: "application/vnd.github+json",
+          "content-type": "application/json",
+          "user-agent": "zoe-outage-bot-worker",
+        },
+        body: JSON.stringify({ ref: "main" }),
+      },
+    );
+    if (dispResp.status === 204) {
+      const freshMeta = await getAlarmMeta(env);
+      freshMeta.lastDispatchAt = now;
+      await putAlarmMeta(env, freshMeta);
+    }
+  }
+}
