@@ -1,5 +1,6 @@
 /**
  * Форматування повідомлень та інлайн-клавіатур для адресних відключень (@zoe_alarm).
+ * Виконано в єдиній стилістиці з основними повідомленнями ГПВ (messages.ts).
  */
 
 import { DEFAULT_SETTLEMENT, type AlarmRow, type TrackedAddress } from "./address";
@@ -20,31 +21,55 @@ export function addressHash(addressId: string): string {
 }
 
 function normalizeTimeDisplay(raw: string): string {
-  return raw.trim().replace(/^(\d{1,2})-(\d{2})$/, "$1:$2");
+  const m = /^(\d{1,2})[-:](\d{2})$/.exec(raw.trim());
+  if (m === null) return raw.trim();
+  return `${m[1]!.padStart(2, "0")}:${m[2]}`;
 }
 
-function formatDateTime(date: string, time: string): string {
-  const d = date.trim();
-  const t = normalizeTimeDisplay(time);
-  if (d && t) return `${d} о ${t}`;
-  return d || t || "невідомо";
+function shortDateDisplay(raw: string): string {
+  const m = /^(\d{2}\.\d{2})\.\d{4}$/.exec(raw.trim());
+  return m !== null ? m[1]! : raw.trim();
+}
+
+function formatTimeWindow(
+  startDate: string,
+  startTime: string,
+  endDate: string,
+  endTime: string,
+): string {
+  const st = normalizeTimeDisplay(startTime);
+  const et = normalizeTimeDisplay(endTime);
+  const sd = startDate.trim();
+  const ed = endDate.trim();
+
+  if (sd && ed && sd !== ed) {
+    return `${st} - ${et} (до ${shortDateDisplay(ed)})`;
+  }
+  if (sd) {
+    return `${st} - ${et} (${shortDateDisplay(sd)})`;
+  }
+  return `${st} - ${et}`;
 }
 
 function isEmergencyReason(reason: string): boolean {
   return reason.toLowerCase().includes("авар");
 }
 
-function postLink(postId: string, label?: string): string {
-  const text = label ? escapeHtml(label) : `пост #${escapeHtml(postId)}`;
-  return `<a href="${ALARM_CHANNEL_URL}/${ encodeURIComponent(postId)}">${text}</a>`;
+function sourceLine(postId?: string): string {
+  const url = postId
+    ? `${ALARM_CHANNEL_URL}/${encodeURIComponent(postId)}`
+    : ALARM_CHANNEL_URL;
+  return `<a href="${url}">Джерело: @zoe_alarm</a>`;
 }
 
 /** Клавіатура зі списком адрес чату та кнопками швидкого видалення. */
-export function addressListKeyboard(addresses: readonly TrackedAddress[]): InlineKeyboardMarkup | undefined {
+export function addressListKeyboard(
+  addresses: readonly TrackedAddress[],
+): InlineKeyboardMarkup | undefined {
   if (addresses.length === 0) return undefined;
   const rows: InlineKeyboardButton[][] = addresses.map((addr) => [
     {
-      text: `🗑 Видалити: ${addr.street}, ${addr.house}`,
+      text: `🗑 ${addr.street}, ${addr.house}`,
       callback_data: `ad:${addressHash(addr.id)}`,
     },
   ]);
@@ -56,59 +81,63 @@ export interface AddressStatusEntry {
   incidents: ActiveChatIncident[];
 }
 
+function incidentStatusLine(address: TrackedAddress, inc: ActiveChatIncident): string {
+  const addrLabel = `${escapeHtml(address.street)}, ${escapeHtml(address.house)}`;
+  const windowStr = escapeHtml(
+    formatTimeWindow(inc.startDate, inc.startTime, inc.endDate, inc.endTime),
+  );
+  const tag = inc.isPreAnnouncement
+    ? "заплановано"
+    : isEmergencyReason(inc.reason)
+      ? "аварійне"
+      : "планове";
+  return `🔴 ${addrLabel}: ${windowStr} — ${tag}`;
+}
+
 export function formatAddressMenu(options: {
   entries: readonly AddressStatusEntry[];
   lastCheckAt: number | null;
 }): string {
-  const lines: string[] = ["🏠 <b>Адреси цього чату (м. Запоріжжя)</b>", ""];
+  const lines: string[] = ["⚙️ <b>Адреси цього чату</b>", ""];
 
   if (options.entries.length === 0) {
     lines.push(
       "Наразі жодної адреси не додано.",
       "",
-      "Щоб відстежувати планові та аварійні відключення з <code>@zoe_alarm</code>, додайте адресу:",
-      "<code>/address add Мирослава Симчича 21А</code>",
-      "<code>/address add пров. Вогняний 5</code>",
+      "Команди: <code>/address add Вулиця Будинок</code> · <code>/address remove 1</code>",
     );
+    if (options.lastCheckAt !== null) {
+      const age = (Date.now() - options.lastCheckAt) / 1000;
+      lines.push(`Перевірено: ${humanizeSeconds(age)} тому`);
+    }
     return lines.join("\n");
   }
 
+  const trackedList = options.entries
+    .map(({ address }) => `${escapeHtml(address.street)}, ${escapeHtml(address.house)}`)
+    .join("; ");
+  lines.push(`Відстежуються: <b>${trackedList}</b>`, "");
+
   for (const { address, incidents } of options.entries) {
-    const label = `📍 <b>${escapeHtml(address.street)}, ${escapeHtml(address.house)}</b>`;
+    const addrLabel = `${escapeHtml(address.street)}, ${escapeHtml(address.house)}`;
     if (incidents.length === 0) {
-      lines.push(`${label}\n   🟢 Активних відключень немає`);
+      lines.push(`${addrLabel} — активних відключень немає 🎉`);
     } else {
       for (const inc of incidents) {
-        const icon = inc.isPreAnnouncement
-          ? "🗓"
-          : isEmergencyReason(inc.reason)
-            ? "🚨"
-            : "🛠";
-        const kindText = inc.isPreAnnouncement
-          ? "Заплановано ремонтні роботи"
-          : isEmergencyReason(inc.reason)
-            ? "Аварійне відключення"
-            : "Планове відключення";
-        const startStr = formatDateTime(inc.startDate, inc.startTime);
-        const endStr = formatDateTime(inc.endDate, inc.endTime);
-        lines.push(
-          `${label}\n` +
-            `   ${icon} <b>${kindText}</b> (${postLink(inc.postId)})\n` +
-            `   🕐 Початок: <code>${escapeHtml(startStr)}</code>\n` +
-            `   🔄 Орієнтовне відновлення: <b><code>${escapeHtml(endStr)}</code></b>`,
-        );
+        lines.push(incidentStatusLine(address, inc));
       }
     }
   }
 
   lines.push(
     "",
+    "Тапніть кнопку нижче, щоб прибрати адресу зі списку.",
     "Команди: <code>/address add Вулиця Будинок</code> · <code>/address remove 1</code>",
   );
 
   if (options.lastCheckAt !== null) {
     const age = (Date.now() - options.lastCheckAt) / 1000;
-    lines.push(`Перевірено @zoe_alarm: ${humanizeSeconds(age)} тому`);
+    lines.push(`Перевірено: ${humanizeSeconds(age)} тому`);
   }
 
   return lines.join("\n");
@@ -137,17 +166,15 @@ export function formatAddressNotFound(raw: string): string {
 export function formatAddressInvalid(): string {
   return (
     "⚠️ Не вдалося розпізнати адресу. Вкажіть вулицю та номер будинку.\n" +
-    "Приклади:\n" +
-    "<code>/address add Мирослава Симчича 21А</code>\n" +
-    "<code>/address add пров. Вогняний 5</code>"
+    "Приклади: <code>/address add Мирослава Симчича 21А</code>, <code>/address add Вогняний 5</code>"
   );
 }
 
 export function formatAddressLimit(limit: number): string {
-  return `⚠️ Максимум ${limit} адрес на чат. Спершу приберіть зайві через <code>/address</code>.`;
+  return `⚠️ Максимум ${limit} адрес на чат. Спершу приберіть зайві: <code>/address remove …</code>`;
 }
 
-/** Повідомлення про нове аварійне або планове відключення за адресою. */
+/** Повідомлення про нове аварійне або планове відключення за адресою (у стилі ГПВ). */
 export function formatAlarmNew(options: {
   address: TrackedAddress;
   row: AlarmRow;
@@ -155,57 +182,72 @@ export function formatAlarmNew(options: {
   isPreAnnouncement: boolean;
 }): string {
   const emergency = isEmergencyReason(options.row.reason);
-  const header = options.isPreAnnouncement
-    ? "🗓 <b>Заплановано відключення за адресою!</b>"
+  const dateLabel = shortDateDisplay(options.row.startDate);
+  const title = options.isPreAnnouncement
+    ? `ЗАПЛАНОВАНО РЕМОНТНІ РОБОТИ${dateLabel ? ` НА ${dateLabel}` : ""}`
     : emergency
-      ? "🚨 <b>Аварійне відключення за адресою!</b>"
-      : "🛠 <b>Планове відключення за адресою!</b>";
+      ? "АВАРІЙНЕ ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ"
+      : "ПЛАНОВЕ ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ";
 
-  const reasonLabel = emergency ? "аварійні роботи" : "планові ремонтні роботи";
-  const startStr = formatDateTime(options.row.startDate, options.row.startTime);
-  const endStr = formatDateTime(options.row.endDate, options.row.endTime);
+  const addrLabel = `${escapeHtml(options.address.street)}, ${escapeHtml(options.address.house)}`;
+  const windowStr = escapeHtml(
+    formatTimeWindow(
+      options.row.startDate,
+      options.row.startTime,
+      options.row.endDate,
+      options.row.endTime,
+    ),
+  );
 
   return (
-    `${header}\n\n` +
-    `📍 <b>${DEFAULT_SETTLEMENT}, ${escapeHtml(options.address.street)}, ${escapeHtml(options.address.house)}</b>\n` +
-    `📋 Причина: ${reasonLabel} (${postLink(options.postId)})\n` +
-    `🕐 Початок: <code>${escapeHtml(startStr)}</code>\n` +
-    `🔄 Орієнтовне відновлення: <b><code>${escapeHtml(endStr)}</code></b>`
+    `⚡ <b>${escapeHtml(title)}</b>\n\n` +
+    `🔴 ${addrLabel}: ${windowStr}\n\n` +
+    sourceLine(options.postId)
   );
 }
 
-/** Повідомлення про зміну орієнтовного часу відновлення. */
+/** Повідомлення про зміну орієнтовного часу відновлення (у стилі ГПВ з позначкою «було: …»). */
 export function formatAlarmTimeChanged(options: {
   address: TrackedAddress;
+  startDate?: string;
+  startTime?: string;
   prevEndDate: string;
   prevEndTime: string;
   newEndDate: string;
   newEndTime: string;
   postId: string;
 }): string {
-  const prevStr =
-    options.prevEndDate.trim() === options.newEndDate.trim()
-      ? normalizeTimeDisplay(options.prevEndTime)
-      : formatDateTime(options.prevEndDate, options.prevEndTime);
-  const newStr = formatDateTime(options.newEndDate, options.newEndTime);
+  const addrLabel = `${escapeHtml(options.address.street)}, ${escapeHtml(options.address.house)}`;
+  const sameEndDate = options.prevEndDate.trim() === options.newEndDate.trim();
+  const prevShort = sameEndDate
+    ? `до ${normalizeTimeDisplay(options.prevEndTime)}`
+    : `до ${normalizeTimeDisplay(options.prevEndTime)} (${shortDateDisplay(options.prevEndDate)})`;
+
+  const currentWindow = options.startTime
+    ? formatTimeWindow(
+        options.startDate ?? options.newEndDate,
+        options.startTime,
+        options.newEndDate,
+        options.newEndTime,
+      )
+    : `до ${normalizeTimeDisplay(options.newEndTime)} (${shortDateDisplay(options.newEndDate)})`;
 
   return (
-    "⏳ <b>Змінено час відновлення за адресою!</b>\n\n" +
-    `📍 <b>${DEFAULT_SETTLEMENT}, ${escapeHtml(options.address.street)}, ${escapeHtml(options.address.house)}</b>\n` +
-    `🔄 Новий час відновлення: <b><code>${escapeHtml(newStr)}</code></b> (було: <code>${escapeHtml(prevStr)}</code>)\n` +
-    `🔗 Джерело: ${postLink(options.postId)}`
+    "⚡ <b>ОНОВЛЕНО ЧАС ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ</b>\n\n" +
+    `🔴 ${addrLabel}: ${escapeHtml(currentWindow)} (було: ${escapeHtml(prevShort)})\n\n` +
+    sourceLine(options.postId)
   );
 }
 
-/** Повідомлення про відновлення електропостачання за адресою. */
+/** Повідомлення про відновлення електропостачання за адресою (у стилі ГПВ). */
 export function formatAlarmRestored(options: {
   address: { street: string; house: string };
   replyPostId?: string;
 }): string {
-  const sourceSuffix = options.replyPostId ? `\n🔗 ${postLink(options.replyPostId, "Джерело: @zoe_alarm")}` : "";
+  const addrLabel = `${escapeHtml(options.address.street)}, ${escapeHtml(options.address.house)}`;
   return (
-    "🟢 <b>Електропостачання відновлено!</b>\n\n" +
-    `📍 <b>${DEFAULT_SETTLEMENT}, ${escapeHtml(options.address.street)}, ${escapeHtml(options.address.house)}</b>` +
-    sourceSuffix
+    "✅ <b>ЕЛЕКТРОПОСТАЧАННЯ ВІДНОВЛЕНО</b>\n\n" +
+    `${addrLabel} — електропостачання відновлено 🎉\n\n` +
+    sourceLine(options.replyPostId)
   );
 }

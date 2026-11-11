@@ -296,6 +296,8 @@ export async function processAlarmIngest(
               chatId,
               formatAlarmTimeChanged({
                 address: trackedAddr,
+                startDate: matchingRow.startDate,
+                startTime: matchingRow.startTime,
                 prevEndDate: inc.endDate,
                 prevEndTime: inc.endTime,
                 newEndDate: matchingRow.endDate,
@@ -350,13 +352,12 @@ export async function processAlarmIngest(
         const exactKey = `${addr.id}::${post.postId}`;
         if (nextIncidents[exactKey] !== undefined) continue;
 
-        // Перевіряємо, чи вже є активний інцидент для цієї самої адреси (напр. кумулятивний файл ЗМЕМ_ЦР_8 -> 9 -> 10)
+        // Перевіряємо, чи вже є активний інцидент для цієї самої адреси (напр. кумулятивний файл ЗМЕМ_ЦР_8 -> 9 -> 10 або старт після вечірнього анонсу)
         const existingForAddr = Object.entries(nextIncidents).find(
           ([, v]) =>
             v.addressId === addr.id &&
             (v.fileName === post.fileName ||
-              (v.startDate.trim() === matchingRow.startDate.trim() &&
-                v.isPreAnnouncement === post.isPreAnnouncement)),
+              v.startDate.trim() === matchingRow.startDate.trim()),
         );
 
         if (existingForAddr !== undefined) {
@@ -371,6 +372,8 @@ export async function processAlarmIngest(
               chatId,
               formatAlarmTimeChanged({
                 address: addr,
+                startDate: matchingRow.startDate,
+                startTime: matchingRow.startTime,
                 prevEndDate: prevInc.endDate,
                 prevEndTime: prevInc.endTime,
                 newEndDate: matchingRow.endDate,
@@ -466,6 +469,10 @@ export async function evaluateAddressesStatus(
   meta: AlarmMeta,
 ): Promise<AddressStatusEntry[]> {
   const now = Date.now();
+  if (addresses.length === 0) {
+    await putAlarmChatState(env, chatId, { updatedAt: now, incidents: {} });
+    return [];
+  }
   const chatState = await getAlarmChatState(env, chatId);
   const resolvedSet = new Set<string>(chatState.resolvedPostIds ?? []);
   const nextIncidents: Record<string, ActiveChatIncident> = {};
@@ -485,8 +492,8 @@ export async function evaluateAddressesStatus(
       if (matchingRow === undefined) continue;
       if (isIncidentExpired(matchingRow.endDate, matchingRow.endTime, now)) continue;
 
-      // Групуємо кумулятивні пости за датою старту + типом анонсу, залишаючи найсвіжіший postId
-      const dedupKey = `${matchingRow.startDate.trim()}::${post.isPreAnnouncement ? "pre" : "now"}`;
+      // Групуємо кумулятивні пости за датою старту, залишаючи найсвіжіший postId
+      const dedupKey = matchingRow.startDate.trim();
       const exactKey = `${addr.id}::${post.postId}`;
       const prev = chatState.incidents[exactKey];
       const prevGroup = addrIncidents.get(dedupKey);

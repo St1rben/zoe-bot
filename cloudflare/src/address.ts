@@ -61,10 +61,11 @@ const HOMOGLYPH_MAP: Readonly<Record<string, string>> = {
   x: "х",
 };
 
-/** Нормалізує номер будинку: прибирає «буд.», пробіли, зводить латиницю до кирилиці. */
+/** Нормалізує номер будинку: прибирає «буд.», примітки в дужках, пробіли, зводить латиницю до кирилиці. */
 export function normalizeHouse(raw: string): string {
   const cleaned = raw
     .trim()
+    .replace(/\([^)]*\)/g, "")
     .replace(/^(?:буд(?:инок|\.)?|д(?:ом|\.)?|№)\s*/i, "")
     .replace(/\s+/g, "")
     .toLowerCase();
@@ -261,7 +262,11 @@ export function matchAddressRow(address: TrackedAddress, row: AlarmRow): boolean
  *   "пров. Вогняний 69/1"  → { street: "пров. Вогняний", house: "69/1" }
  */
 export function parseAddressInput(raw: string): TrackedAddress | null {
-  const cleaned = raw.trim().replace(/\s+/g, " ");
+  // Склеюємо пробіл між цифрою та одиночною літерою корпусу в кінці ("21 А" -> "21А")
+  const cleaned = raw
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/(\d)\s+([а-яіїєґa-z])$/iu, "$1$2");
   if (!cleaned) return null;
 
   // Шукаємо останній токен як номер будинку (напр. "21А", "69/1", "буд. 5")

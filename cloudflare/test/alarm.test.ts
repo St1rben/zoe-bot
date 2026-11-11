@@ -42,6 +42,13 @@ describe("address parsing & matching", () => {
       house: "69/1",
     });
 
+    // Пробіл між цифрою та літерою корпусу ("21 А" -> "21А")
+    expect(parseAddressInput("Мирослава Симчича 21 А")).toEqual({
+      id: "мирослава симчича:21а",
+      street: "Мирослава Симчича",
+      house: "21А",
+    });
+
     expect(parseAddressInput("ЛишеВулицяБезБудинку")).toBeNull();
   });
 
@@ -88,6 +95,8 @@ describe("address parsing & matching", () => {
     expect(matchHouse("92А", houses)).toBe(true);
     expect(matchHouse("76", houses)).toBe(true);
     expect(matchHouse("77", houses)).toBe(false); // непарний у парному діапазоні 74-92А
+    // Примітка "(будівельний)" у клітинці ЗОЕ ігнорується
+    expect(matchHouse("20", "20(будівельний)|4А|5А")).toBe(true);
   });
 
   it("matchAddressRow перевіряє населений пункт, вулицю і будинок", () => {
@@ -146,9 +155,8 @@ describe("alarmMonitor full lifecycle", () => {
     });
     expect(step1.notificationsSent).toBe(1);
     expect(net.telegramCalls).toHaveLength(1);
-    expect(net.telegramCalls[0]!.text).toContain("Аварійне відключення за адресою");
-    expect(net.telegramCalls[0]!.text).toContain("Мирослава Симчича, 21А");
-    expect(net.telegramCalls[0]!.text).toContain("12.11.2026 о 09:00");
+    expect(net.telegramCalls[0]!.text).toContain("АВАРІЙНЕ ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ");
+    expect(net.telegramCalls[0]!.text).toContain("🔴 Мирослава Симчича, 21А: 19:33 - 09:00 (до 12.11)");
 
     // 3. Виходить кумулятивний пост (#81836) з тим самим часом відновлення — дубля НЕ має бути
     const step2 = await processAlarmIngest(env, {
@@ -177,9 +185,8 @@ describe("alarmMonitor full lifecycle", () => {
     });
     expect(step3.notificationsSent).toBe(1);
     expect(net.telegramCalls).toHaveLength(2);
-    expect(net.telegramCalls[1]!.text).toContain("Змінено час відновлення за адресою");
-    expect(net.telegramCalls[1]!.text).toContain("12.11.2026 о 14:00");
-    expect(net.telegramCalls[1]!.text).toContain("було: <code>09:00</code>");
+    expect(net.telegramCalls[1]!.text).toContain("ОНОВЛЕНО ЧАС ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ");
+    expect(net.telegramCalls[1]!.text).toContain("19:33 - 14:00 (до 12.11) (було: до 09:00)");
 
     // 5. Виходить реплай "Електропостачання відновлено." на пост #81837
     const step4 = await processAlarmIngest(env, {
@@ -193,8 +200,8 @@ describe("alarmMonitor full lifecycle", () => {
     });
     expect(step4.notificationsSent).toBe(1);
     expect(net.telegramCalls).toHaveLength(3);
-    expect(net.telegramCalls[2]!.text).toContain("Електропостачання відновлено!");
-    expect(net.telegramCalls[2]!.text).toContain("Мирослава Симчича, 21А");
+    expect(net.telegramCalls[2]!.text).toContain("ЕЛЕКТРОПОСТАЧАННЯ ВІДНОВЛЕНО");
+    expect(net.telegramCalls[2]!.text).toContain("Мирослава Симчича, 21А — електропостачання відновлено 🎉");
   });
 
   it("часткове відновлення: коли у файлі-відповіді адреси більше немає — сповіщає про відновлення", async () => {
@@ -236,8 +243,8 @@ describe("alarmMonitor full lifecycle", () => {
     });
     expect(partial.notificationsSent).toBe(1);
     expect(net.telegramCalls).toHaveLength(2);
-    expect(net.telegramCalls[1]!.text).toContain("Електропостачання відновлено!");
-    expect(net.telegramCalls[1]!.text).toContain("Вогнетривна, 5");
+    expect(net.telegramCalls[1]!.text).toContain("ЕЛЕКТРОПОСТАЧАННЯ ВІДНОВЛЕНО");
+    expect(net.telegramCalls[1]!.text).toContain("Вогнетривна, 5 — електропостачання відновлено 🎉");
   });
 
   it("команда /address add, перегляд і видалення через інлайн-кнопку працюють ізольовано", async () => {
@@ -257,7 +264,7 @@ describe("alarmMonitor full lifecycle", () => {
     expect(listAfterAdd).toHaveLength(1);
     expect(net.telegramCalls).toHaveLength(2); // "Додано адресу" + меню /address
     expect(net.telegramCalls[0]!.text).toContain("Додано адресу");
-    expect(net.telegramCalls[1]!.text).toContain("Активних відключень немає");
+    expect(net.telegramCalls[1]!.text).toContain("активних відключень немає 🎉");
 
     // Натискаємо кнопку видалення
     const hash = addressHash(listAfterAdd[0]!.id);

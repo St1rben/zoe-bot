@@ -36,11 +36,22 @@ USER_AGENT = (
 NS_MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 
-def parse_xlsx_bytes(data: bytes) -> list[dict[str, str]]:
+def extract_file_date(file_name: str | None) -> str | None:
+    """Витягує дату DD.MM.20YY з назви файлу (напр. '..._12_11_26.xlsx' -> '12.11.2026')."""
+    if not file_name:
+        return None
+    m = re.search(r"_(\d{2})_(\d{2})_(\d{2})\.xlsx$", file_name.strip(), re.I)
+    if not m:
+        return None
+    return f"{m.group(1)}.{m.group(2)}.20{m.group(3)}"
+
+
+def parse_xlsx_bytes(data: bytes, file_name: str | None = None) -> list[dict[str, str]]:
     """
     Розбирає .xlsx файл ЗОЕ у список рядків AlarmRow, протягуючи згруповані
     комірки (№ з/п, Населений пункт, Причина, Дата/Час початку та відновлення).
     """
+    file_date = extract_file_date(file_name)
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         shared: list[str] = []
         if "xl/sharedStrings.xml" in zf.namelist():
@@ -141,6 +152,14 @@ def parse_xlsx_bytes(data: bytes) -> list[dict[str, str]]:
         if not cur_street or not d:
             continue
 
+        start_date = cur_start_date
+        end_date = cur_end_date
+        # Іноді оператор (напр. ЗМЕМ_ПБ у анонсах на завтра) забуває змінити вчорашню дату
+        # всередині таблиці, хоча в назві файлу стоїть актуальна дата (_12_11_26.xlsx)
+        if file_date and start_date and start_date == end_date and start_date != file_date:
+            start_date = file_date
+            end_date = file_date
+
         parsed.append(
             {
                 "groupId": cur_group,
@@ -148,9 +167,9 @@ def parse_xlsx_bytes(data: bytes) -> list[dict[str, str]]:
                 "street": cur_street,
                 "houses": d,
                 "reason": cur_reason or "аварійні",
-                "startDate": cur_start_date,
+                "startDate": start_date,
                 "startTime": cur_start_time,
-                "endDate": cur_end_date,
+                "endDate": end_date,
                 "endTime": cur_end_time,
             }
         )
@@ -363,7 +382,7 @@ def main() -> int:
             if not raw_bytes:
                 print(f"Warning: could not download .xlsx for post {pid_int}", file=sys.stderr)
                 continue
-            rows = parse_xlsx_bytes(raw_bytes)
+            rows = parse_xlsx_bytes(raw_bytes, p.get("fileName"))
             print(f"Parsed {p['fileName']} (post #{pid_int}): {len(rows)} rows")
             new_posts_payload.append(
                 {
