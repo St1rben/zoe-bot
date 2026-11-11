@@ -285,10 +285,11 @@ export async function processAlarmIngest(
             if (ok) notificationsSent += 1;
           }
         } else {
-          // Адреса залишилась у новому файлі — перевіряємо, чи змінився час відновлення
+          // Адреса залишилась у новому файлі — перевіряємо, чи змінився час відновлення або почалися роботи після анонсу
           const timeChanged =
             matchingRow.endDate.trim() !== inc.endDate.trim() ||
             matchingRow.endTime.trim() !== inc.endTime.trim();
+          const startedAfterPre = inc.isPreAnnouncement && !replacement.isPreAnnouncement;
 
           if (timeChanged && !silent) {
             const ok = await sendMessage(
@@ -303,6 +304,18 @@ export async function processAlarmIngest(
                 newEndDate: matchingRow.endDate,
                 newEndTime: matchingRow.endTime,
                 postId: replacement.postId,
+              }),
+            );
+            if (ok) notificationsSent += 1;
+          } else if (startedAfterPre && !silent) {
+            const ok = await sendMessage(
+              env,
+              chatId,
+              formatAlarmNew({
+                address: trackedAddr,
+                row: matchingRow,
+                postId: replacement.postId,
+                isPreAnnouncement: false,
               }),
             );
             if (ok) notificationsSent += 1;
@@ -365,6 +378,7 @@ export async function processAlarmIngest(
           const timeChanged =
             prevInc.endDate.trim() !== matchingRow.endDate.trim() ||
             prevInc.endTime.trim() !== matchingRow.endTime.trim();
+          const startedAfterPre = prevInc.isPreAnnouncement && !post.isPreAnnouncement;
 
           if (timeChanged && !shouldSilenceNew) {
             const ok = await sendMessage(
@@ -379,6 +393,18 @@ export async function processAlarmIngest(
                 newEndDate: matchingRow.endDate,
                 newEndTime: matchingRow.endTime,
                 postId: post.postId,
+              }),
+            );
+            if (ok) notificationsSent += 1;
+          } else if (startedAfterPre && !shouldSilenceNew) {
+            const ok = await sendMessage(
+              env,
+              chatId,
+              formatAlarmNew({
+                address: addr,
+                row: matchingRow,
+                postId: post.postId,
+                isPreAnnouncement: false,
               }),
             );
             if (ok) notificationsSent += 1;
