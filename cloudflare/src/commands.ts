@@ -1,5 +1,6 @@
 /** Обробка команд із Telegram-вебхука: /start, /help, /queue, /status + кнопки вибору черг. */
 
+import { handleAddressCommand, handleAddressDeleteCallback } from "./alarmMonitor";
 import {
   formatHelp,
   formatMultiUpdate,
@@ -82,6 +83,11 @@ function normalizeQueues(
 
 export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<void> {
   if (update.callback_query !== undefined) {
+    const data = update.callback_query.data ?? "";
+    if (data.startsWith("ad:")) {
+      await handleAddressDeleteCallback(env, update.callback_query);
+      return;
+    }
     await handleQueueToggleCallback(env, update.callback_query);
     return;
   }
@@ -118,6 +124,10 @@ export async function handleUpdate(env: Env, update: TelegramUpdate): Promise<vo
       break;
     case "status":
       await handleStatus(env, chatId);
+      break;
+    case "address":
+    case "addr":
+      await handleAddressCommand(env, chatId, argument, actorId(update));
       break;
     default:
       break;

@@ -7,6 +7,8 @@
  *   cron * * * * * — сторож: якщо /ingest довго мовчить, будить zoe-fetch.yml
  */
 
+import { processAlarmIngest, type AlarmIngestPayload } from "./alarmMonitor";
+import { getAlarmMeta } from "./alarmState";
 import { handleUpdate } from "./commands";
 import { wakeFetchIfStale } from "./github";
 import { processHtml } from "./monitor";
@@ -41,6 +43,16 @@ export default {
     if (url.pathname === "/ingest") {
       if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
       return await ingestResponse(env, request);
+    }
+
+    if (url.pathname === "/ingest-alarm") {
+      if (request.method !== "POST") return new Response("Method Not Allowed", { status: 405 });
+      return await ingestAlarmResponse(env, request);
+    }
+
+    if (url.pathname === "/alarm/state") {
+      if (request.method !== "GET") return new Response("Method Not Allowed", { status: 405 });
+      return await alarmStateResponse(env, request);
     }
 
     if (url.pathname === "/" || url.pathname === "/health") {
@@ -87,6 +99,52 @@ async function ingestResponse(env: Env, request: Request): Promise<Response> {
     return Response.json(summary);
   } catch (error) {
     console.error("ingest failed:", error);
+    return Response.json({ ok: false, error: String(error) }, { status: 500 });
+  }
+}
+
+async function ingestAlarmResponse(env: Env, request: Request): Promise<Response> {
+  const secret = env.INGEST_TOKEN;
+  if (secret === undefined || secret === "") {
+    return new Response("Ingest is not configured", { status: 503 });
+  }
+  const provided = request.headers.get("x-ingest-token") ?? "";
+  if (!constantTimeEqual(secret, provided)) return new Response("Forbidden", { status: 403 });
+
+  let payload: AlarmIngestPayload;
+  try {
+    payload = await request.json<AlarmIngestPayload>();
+  } catch {
+    return Response.json({ ok: false, error: "bad_json" }, { status: 400 });
+  }
+
+  try {
+    const summary = await processAlarmIngest(env, payload);
+    console.log("ingest-alarm:", JSON.stringify(summary));
+    return Response.json(summary);
+  } catch (error) {
+    console.error("ingest-alarm failed:", error);
+    return Response.json({ ok: false, error: String(error) }, { status: 500 });
+  }
+}
+
+async function alarmStateResponse(env: Env, request: Request): Promise<Response> {
+  const secret = env.INGEST_TOKEN;
+  if (secret === undefined || secret === "") {
+    return new Response("Ingest is not configured", { status: 503 });
+  }
+  const provided = request.headers.get("x-ingest-token") ?? "";
+  if (!constantTimeEqual(secret, provided)) return new Response("Forbidden", { status: 403 });
+
+  try {
+    const meta = await getAlarmMeta(env);
+    return Response.json({
+      ok: true,
+      processedPostIds: meta.processedPostIds,
+      activePostIds: Object.keys(meta.activePosts),
+      lastCheckAt: meta.lastCheckAt,
+    });
+  } catch (error) {
     return Response.json({ ok: false, error: String(error) }, { status: 500 });
   }
 }

@@ -374,7 +374,7 @@ describe("health", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; version: string };
     expect(body.status).toBe("ok");
-    expect(body.version).toBe("1.10.2");
+    expect(body.version).toBe("1.11.0");
   });
 
   it("GET /telegram — 405", async () => {
