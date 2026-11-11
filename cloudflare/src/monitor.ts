@@ -6,7 +6,6 @@
 
 import {
   formatMultiDigest,
-  formatMultiUnchangedUpdate,
   formatMultiUpdate,
   formatParseAlert,
   formatStartup,
@@ -111,6 +110,52 @@ export function stalePostNote(title: string | null, now: Date, timeZone: string)
     `⚠️ На ${day} ${monthGenitive(month)} графік для населення не публікували — ` +
     `відключень на сьогодні не оголошено. Нижче — дані за ${postDate.day} ${monthGenitive(postDate.month)}.`
   );
+}
+
+/** Ключ дати з заголовка поста («MM-DD»), або null якщо дату не розпізнано. */
+export function postDateKey(title: string): string | null {
+  const parsed = parseTitleDate(title);
+  return parsed !== null ? `${parsed.month}-${parsed.day}` : null;
+}
+
+/**
+ * Знаходить попередній надісланий стан чату для цього поста або (якщо zoe.com.ua
+ * опублікував «ОНОВЛЕНО ГПВ» як нову статтю з новим post-ID) для попереднього
+ * поста за ту саму дату графіка.
+ */
+function findPreviousPostState(
+  post: OutagePost,
+  postsState: Record<string, ChatPostState>,
+  consumerPosts: readonly OutagePost[],
+  meta: Meta,
+): ChatPostState | undefined {
+  const direct = postsState[post.id];
+  if (direct !== undefined) return direct;
+
+  const dateKey = postDateKey(post.title);
+  if (dateKey === null) return undefined;
+
+  for (const candidate of consumerPosts) {
+    if (candidate.id === post.id) continue;
+    const candidateState = postsState[candidate.id];
+    if (candidateState !== undefined && (candidateState.dateKey ?? postDateKey(candidate.title)) === dateKey) {
+      return candidateState;
+    }
+  }
+
+  for (const [oldId, state] of Object.entries(postsState).reverse()) {
+    if (state.dateKey === dateKey) return state;
+    if (
+      state.dateKey === undefined &&
+      oldId === meta.lastPostId &&
+      meta.lastPostTitle !== null &&
+      postDateKey(meta.lastPostTitle) === dateKey
+    ) {
+      return state;
+    }
+  }
+
+  return undefined;
 }
 
 /** Карта «черга → сценарій» — стан дедуплікації чату. */
@@ -254,14 +299,21 @@ export async function processHtml(
         scenarioFor(post, queue),
       ]);
       const scenarioMap = scenarioMapFromEntries(entries);
-      const prevPost = postsState[post.id];
+      const dateKey = postDateKey(post.title);
+      const prevPost = findPreviousPostState(post, postsState, consumerPosts, meta);
 
       let messageText: string | null = null;
       if (prevPost !== undefined) {
-        // Правка поста, який ми вже надсилали
-        messageText = sameScenarioMap(prevPost.queues, scenarioMap)
-          ? formatMultiUnchangedUpdate(post.title, entries)
-          : formatMultiUpdate(post.title, entries);
+        // Правка того самого поста або новий пост «ОНОВЛЕНО ГПВ» за ту саму дату:
+        // якщо для черг цього чату нічого не змінилося — мовчимо, лише оновлюємо стан.
+        if (sameScenarioMap(prevPost.queues, scenarioMap)) {
+          if (postsState[post.id] === undefined || postsState[post.id]?.dateKey !== dateKey) {
+            postsState[post.id] = { queues: scenarioMap, dateKey };
+            chatDirty = true;
+          }
+        } else {
+          messageText = formatMultiUpdate(post.title, entries, prevPost.queues);
+        }
       } else if (isFirstRun && post.id === primary.id) {
         // Перший запуск: вітання вже пішло, показуємо новітній пост
         messageText = formatMultiUpdate(post.title, entries);
@@ -269,14 +321,16 @@ export async function processHtml(
         !isFirstRun &&
         (post.id === primary.id || knownSigs[post.id] !== undefined)
       ) {
-        // Новий верхній пост — або правка поста, що був у трекінгу, але
-        // ще не доставлявся (приглушений на першому запуску)
+        // Новий верхній пост за іншу дату — або правка поста без попереднього стану
         messageText = formatMultiUpdate(post.title, entries);
+      } else {
+        // Пост уперше потрапив у трекінг нижче верхнього — тихо реєструємо
+        postsState[post.id] = { queues: scenarioMap, dateKey };
+        chatDirty = true;
       }
-      // Інакше пост уперше потрапив у трекінг нижче верхнього — тихо реєструємо
 
       if (messageText !== null && (await sendMessage(env, chat.chatId, messageText))) {
-        postsState[post.id] = { queues: scenarioMap };
+        postsState[post.id] = { queues: scenarioMap, dateKey };
         chatDirty = true;
         if (!sentTo.includes(chat.chatId)) sentTo.push(chat.chatId);
       }

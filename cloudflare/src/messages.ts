@@ -8,6 +8,7 @@ import {
   sortQueues,
   type Scenario,
 } from "./parser";
+import type { QueueScenario } from "./state";
 import type { InlineKeyboardButton, InlineKeyboardMarkup } from "./telegram";
 
 export const COMMANDS_HELP =
@@ -84,21 +85,32 @@ export function formatQueueInvalid(raw: string): string {
   );
 }
 
-function scenarioLine(queue: string, scenario: Scenario): string {
+function previousScenarioShort(prev: QueueScenario): string {
+  if (prev.kind === SCENARIO_PRESENT) return escapeHtml(prev.times ?? "");
+  return "без відключень";
+}
+
+function scenarioLine(queue: string, scenario: Scenario, prev?: QueueScenario): string {
+  const changed = prev !== undefined && (prev.kind !== scenario.kind || prev.times !== scenario.times);
+  const diffSuffix = changed ? ` (було: ${previousScenarioShort(prev)})` : "";
+
   if (scenario.kind === SCENARIO_NO_SCHEDULE) {
     return (
       "Графіки погодинних відключень не заплановані.\n" +
-      `Черга ${escapeHtml(queue)} сьогодні не відключатиметься 🎉`
+      `Черга ${escapeHtml(queue)} сьогодні не відключатиметься 🎉${diffSuffix}`
     );
   }
   if (scenario.kind === SCENARIO_PRESENT) {
-    return `🔴 Черга ${escapeHtml(queue)}: ${escapeHtml(scenario.times ?? "")}`;
+    return `🔴 Черга ${escapeHtml(queue)}: ${escapeHtml(scenario.times ?? "")}${diffSuffix}`;
   }
-  return `Черга ${escapeHtml(queue)} у графіку відсутня — світло не відключатимуть 🎉`;
+  return `Черга ${escapeHtml(queue)} у графіку відсутня — світло не відключатимуть 🎉${diffSuffix}`;
 }
 
-function scenarioLines(entries: readonly QueueScenarioEntry[]): string {
-  return entries.map(([queue, scenario]) => scenarioLine(queue, scenario)).join("\n");
+function scenarioLines(
+  entries: readonly QueueScenarioEntry[],
+  prevQueues?: Record<string, QueueScenario>,
+): string {
+  return entries.map(([queue, scenario]) => scenarioLine(queue, scenario, prevQueues?.[queue])).join("\n");
 }
 
 function updateIcon(entries: readonly QueueScenarioEntry[]): string {
@@ -108,10 +120,14 @@ function updateIcon(entries: readonly QueueScenarioEntry[]): string {
   return "☀️";
 }
 
-export function formatMultiUpdate(title: string, entries: readonly QueueScenarioEntry[]): string {
+export function formatMultiUpdate(
+  title: string,
+  entries: readonly QueueScenarioEntry[],
+  prevQueues?: Record<string, QueueScenario>,
+): string {
   return (
     `${updateIcon(entries)} <b>${escapeHtml(title)}</b>\n\n` +
-    `${scenarioLines(entries)}\n\n` +
+    `${scenarioLines(entries, prevQueues)}\n\n` +
     SOURCE_LINE
   );
 }

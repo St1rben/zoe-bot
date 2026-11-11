@@ -61,7 +61,7 @@ describe("runCheck", () => {
     expect(net.telegramCalls).toHaveLength(2);
   });
 
-  it("оновлення часу того самого поста надсилається ще раз", async () => {
+  it("оновлення часу того самого поста надсилається з позначкою «було»", async () => {
     const page = { html: MIXED_PAGE_HTML };
     const net = installNetworkStub({ page: () => page.html });
     await setChatQueues(env, CHAT_ID, null);
@@ -72,29 +72,54 @@ describe("runCheck", () => {
     const summary = await runCheck(env);
     expect(summary.sentTo).toEqual([CHAT_ID]);
     expect(net.telegramCalls).toHaveLength(3);
-    expect(net.telegramCalls[2]!.text).toContain("5.1: 12:00 - 14:00");
+    expect(net.telegramCalls[2]!.text).toContain("5.1: 12:00 - 14:00 (було: 08:00 - 10:00, 16:00 - 20:00)");
   });
 
-  it("коли пост оновлено, але черга чату не змінилася — надсилається сповіщення без змін", async () => {
+  it("коли пост оновлено (або вийшов новий пост за ту саму дату), але черги чату не змінилися — мовчить", async () => {
     const page = { html: MIXED_PAGE_HTML };
     const net = installNetworkStub({ page: () => page.html });
     await setChatQueues(env, CHAT_ID, null);
     await runCheck(env);
     expect(net.telegramCalls).toHaveLength(2);
 
+    // Правка того самого поста для іншої черги (1.1) — для 5.1 тиша
     page.html = MIXED_PAGE_HTML.replace("1.1: 08:00 - 12:00", "1.1: 09:00 - 13:00");
     const summary = await runCheck(env);
-    expect(summary.sentTo).toEqual([CHAT_ID]);
-    expect(net.telegramCalls).toHaveLength(3);
+    expect(summary.sentTo).toEqual([]);
+    expect(net.telegramCalls).toHaveLength(2);
 
-    const call = net.telegramCalls[2]!;
-    expect(call.text).toContain("Графіки було оновлено, але для ваших черг усе без змін");
-    expect(call.text).toContain("Черга 5.1: 08:00 - 10:00, 16:00 - 20:00");
-    expect(call.text).toContain("🔄");
+    // Новий article id на ту саму дату (17 жовтня), де 5.1 не змінилася — теж тиша
+    page.html = `
+<html><body>
+<article id="post-1235">
+  <h2>ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ (оновлено 14:00)</h2>
+  <div class="content">
+    <p>1.1: 10:00 - 14:00</p>
+    <p>5.1: 08:00 - 10:00, 16:00 - 20:00</p>
+  </div>
+</article>
+${page.html.slice(page.html.indexOf('<article id="post-1234"'))}`;
+    const sameDayUnchanged = await runCheck(env);
+    expect(sameDayUnchanged.sentTo).toEqual([]);
+    expect(net.telegramCalls).toHaveLength(2);
 
-    const nextSummary = await runCheck(env);
-    expect(nextSummary.sentTo).toEqual([]);
+    // Новий article id на ту саму дату (17 жовтня), де 5.1 ЗМІНИЛАСЯ — надсилає з «було»
+    page.html = `
+<html><body>
+<article id="post-1236">
+  <h2>ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ (оновлено 15:30)</h2>
+  <div class="content">
+    <p>1.1: 10:00 - 14:00</p>
+    <p>5.1: 17:30 - 19:30</p>
+  </div>
+</article>
+</body></html>`;
+    const sameDayChanged = await runCheck(env);
+    expect(sameDayChanged.sentTo).toEqual([CHAT_ID]);
     expect(net.telegramCalls).toHaveLength(3);
+    expect(net.telegramCalls[2]!.text).toContain(
+      "Черга 5.1: 17:30 - 19:30 (було: 08:00 - 10:00, 16:00 - 20:00)",
+    );
   });
 
   it("зміна черги чату: /queue одразу надсилає графік нової черги", async () => {
@@ -176,11 +201,10 @@ describe("runCheck", () => {
       }),
     );
 
-    const summary = await runCheck(env);
-    // вітання (meta порожнє) + «оновлено без змін» — дубля основного сценарію немає
-    expect(net.telegramCalls).toHaveLength(2);
+    await runCheck(env);
+    // лише вітання (meta порожнє), без дублювання графіка, який уже не змінився
+    expect(net.telegramCalls).toHaveLength(1);
     expect(net.telegramCalls[0]!.text).toContain("Бот запущено");
-    expect(net.telegramCalls[1]!.text).toContain("для ваших черг усе без змін");
 
     const state = await getChatState(env, CHAT_ID);
     expect(state?.posts["post-1234"]?.queues["5.1"]?.kind).toBe("present");

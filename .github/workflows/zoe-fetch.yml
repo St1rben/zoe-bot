@@ -23,26 +23,51 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 6
     env:
       WORKER_URL: "https://zoe-outage-bot.kir245314.workers.dev"
       SOURCE_URL: "https://www.zoe.com.ua/outage/"
       BROWSER_UA: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
     steps:
+      # Кешуємо і guard-вузли/консенсус Tor, і самі .deb-пакети tor/tor-geoipdb,
+      # щоб не залежати від нестабільного DNS security.ubuntu.com на кожному запуску.
+      - name: Кеш tor-пакетів та даних
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/tor-data
+            ${{ runner.temp }}/tor-debs
+          key: tor-ua-${{ hashFiles('/etc/os-release') }}-v2
+          restore-keys: |
+            tor-ua-${{ hashFiles('/etc/os-release') }}-
+            tor-data-ua-
+
       - name: Встановити tor
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends tor tor-geoipdb
-
-      # Збережені guard-вузли та консенсус роблять bootstrap Tor швидким
-      # (секунди замість 1–5 хв) — це основна внутрішня затримка фетча.
-      - name: Кеш tor-даних
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/tor-data
-          key: tor-data-ua-v1
+          DEB_DIR="$RUNNER_TEMP/tor-debs"
+          mkdir -p "$DEB_DIR"
+          if ! command -v tor >/dev/null 2>&1 && ls "$DEB_DIR"/*.deb >/dev/null 2>&1; then
+            echo "Встановлюємо tor із кешованих .deb пакетів..."
+            sudo dpkg -i "$DEB_DIR"/*.deb || true
+          fi
+          if ! command -v tor >/dev/null 2>&1; then
+            echo "Кешу .deb немає або не підійшов — завантажуємо через apt..."
+            APT_OPTS=(-o Acquire::Retries=2 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10)
+            if ! sudo apt-get "${APT_OPTS[@]}" update -qq; then
+              echo "Дзеркало apt-mirrors/security.ubuntu.com недоступне — перемикаємо на archive.ubuntu.com"
+              sudo sed -i \
+                -e 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' \
+                -e 's|https\?://security\.ubuntu\.com/ubuntu|http://archive.ubuntu.com/ubuntu|g' \
+                /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
+              sudo apt-get "${APT_OPTS[@]}" update -qq
+            fi
+            sudo rm -f "$DEB_DIR"/*.deb
+            sudo apt-get "${APT_OPTS[@]}" install -y -qq --no-install-recommends \
+              -o Dir::Cache::Archives="$DEB_DIR" tor tor-geoipdb
+            sudo chmod -R a+rX "$DEB_DIR" || true
+          fi
 
       - name: Підняти tor з українським виходом
         run: |

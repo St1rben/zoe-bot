@@ -19,7 +19,7 @@ import {
   queuePickerKeyboard,
   type QueueScenarioEntry,
 } from "./messages";
-import { scenarioMapFromEntries, stalePostNote } from "./monitor";
+import { postDateKey, scenarioMapFromEntries, stalePostNote } from "./monitor";
 import {
   MAX_QUEUES_PER_CHAT,
   scenarioFor,
@@ -146,7 +146,9 @@ async function handleBotMembership(env: Env, event: TelegramChatMemberUpdated): 
     const queues = queuesOr(env.QUEUE, await getChatQueues(env, chatId));
     const entries = queues.map((queue) => [queue, scenarioFor(post, queue)] as const);
     await putChatState(env, chatId, {
-      posts: { [post.id]: { queues: scenarioMapFromEntries(entries) } },
+      posts: {
+        [post.id]: { queues: scenarioMapFromEntries(entries), dateKey: postDateKey(post.title) },
+      },
       updatedAt: Date.now(),
     });
   }
@@ -393,7 +395,9 @@ async function sendCurrentSchedule(
   ]);
   if (await sendMessage(env, chatId, formatMultiUpdate(post.title, entries))) {
     await putChatState(env, chatId, {
-      posts: { [post.id]: { queues: scenarioMapFromEntries(entries) } },
+      posts: {
+        [post.id]: { queues: scenarioMapFromEntries(entries), dateKey: postDateKey(post.title) },
+      },
       updatedAt: Date.now(),
     });
   }

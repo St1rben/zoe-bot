@@ -35,6 +35,8 @@ export interface QueueScenario {
 /** Стан чату за один пост: які сценарії ми вже надсилали. */
 export interface ChatPostState {
   queues: Record<string, QueueScenario>;
+  /** Ключ дати з заголовка («MM-DD»), щоб розпізнавати нові пости «ОНОВЛЕНО ГПВ» за ту саму добу. */
+  dateKey?: string | null;
 }
 
 export interface ChatState {
