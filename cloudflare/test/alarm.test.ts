@@ -156,7 +156,9 @@ describe("alarmMonitor full lifecycle", () => {
     expect(step1.notificationsSent).toBe(1);
     expect(net.telegramCalls).toHaveLength(1);
     expect(net.telegramCalls[0]!.text).toContain("АВАРІЙНЕ ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ");
-    expect(net.telegramCalls[0]!.text).toContain("🔴 Мирослава Симчича, 21А: 19:33 - 09:00 (до 12.11)");
+    expect(net.telegramCalls[0]!.text).toContain(
+      "🔴 Мирослава Симчича, 21А: з 19:33 (11.11) до 09:00 (12.11)",
+    );
 
     // 3. Виходить кумулятивний пост (#81836) з тим самим часом відновлення — дубля НЕ має бути
     const step2 = await processAlarmIngest(env, {
@@ -186,7 +188,9 @@ describe("alarmMonitor full lifecycle", () => {
     expect(step3.notificationsSent).toBe(1);
     expect(net.telegramCalls).toHaveLength(2);
     expect(net.telegramCalls[1]!.text).toContain("ОНОВЛЕНО ЧАС ВІДКЛЮЧЕННЯ ЗА АДРЕСОЮ");
-    expect(net.telegramCalls[1]!.text).toContain("19:33 - 14:00 (до 12.11) (було: до 09:00)");
+    expect(net.telegramCalls[1]!.text).toContain(
+      "з 19:33 (11.11) до 14:00 (12.11) (було: до 09:00)",
+    );
 
     // 5. Виходить реплай "Електропостачання відновлено." на пост #81837
     const step4 = await processAlarmIngest(env, {

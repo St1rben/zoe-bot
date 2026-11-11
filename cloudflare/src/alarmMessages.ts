@@ -43,12 +43,12 @@ function formatTimeWindow(
   const ed = endDate.trim();
 
   if (sd && ed && sd !== ed) {
-    return `${st} - ${et} (до ${shortDateDisplay(ed)})`;
+    return `з ${st} (${shortDateDisplay(sd)}) до ${et} (${shortDateDisplay(ed)})`;
   }
   if (sd) {
-    return `${st} - ${et} (${shortDateDisplay(sd)})`;
+    return `з ${st} до ${et} (${shortDateDisplay(sd)})`;
   }
-  return `${st} - ${et}`;
+  return `з ${st} до ${et}`;
 }
 
 function isEmergencyReason(reason: string): boolean {
