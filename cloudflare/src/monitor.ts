@@ -290,7 +290,8 @@ export async function processHtml(
   for (const chat of chats) {
     const queues = queuesOr(env.QUEUE, chat.queues);
     const previous = await getChatState(env, chat.chatId);
-    const postsState: Record<string, ChatPostState> = { ...(previous?.posts ?? {}) };
+    const previousPostsState: Record<string, ChatPostState> = { ...(previous?.posts ?? {}) };
+    const postsState: Record<string, ChatPostState> = { ...previousPostsState };
     let chatDirty = false;
 
     for (const post of changedPosts) {
@@ -300,7 +301,26 @@ export async function processHtml(
       ]);
       const scenarioMap = scenarioMapFromEntries(entries);
       const dateKey = postDateKey(post.title);
-      const prevPost = findPreviousPostState(post, postsState, consumerPosts, meta);
+
+      // Якщо вище на сторінці вже є свіжіший пост за цю саму дату (наприклад,
+      // вийшло одразу кілька «ОНОВЛЕНО ГПВ НА 11 ЛИСТОПАДА»), нижній пост за ту
+      // саму добу вже застарів — тихо фіксуємо його стан і не надсилаємо.
+      const supersededByNewerSameDay =
+        dateKey !== null &&
+        consumerPosts[0]?.id !== post.id &&
+        consumerPosts.some(
+          (candidate) =>
+            candidate.id !== post.id &&
+            consumerPosts.indexOf(candidate) < consumerPosts.indexOf(post) &&
+            postDateKey(candidate.title) === dateKey,
+        );
+      if (supersededByNewerSameDay) {
+        postsState[post.id] = { queues: scenarioMap, dateKey };
+        chatDirty = true;
+        continue;
+      }
+
+      const prevPost = findPreviousPostState(post, previousPostsState, consumerPosts, meta);
 
       let messageText: string | null = null;
       if (prevPost !== undefined) {

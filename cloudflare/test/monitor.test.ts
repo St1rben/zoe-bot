@@ -117,9 +117,28 @@ ${page.html.slice(page.html.indexOf('<article id="post-1234"'))}`;
     const sameDayChanged = await runCheck(env);
     expect(sameDayChanged.sentTo).toEqual([CHAT_ID]);
     expect(net.telegramCalls).toHaveLength(3);
-    expect(net.telegramCalls[2]!.text).toContain(
-      "Черга 5.1: 17:30 - 19:30 (було: 08:00 - 10:00, 16:00 - 20:00)",
-    );
+    // Якщо одночасно з'явилися одразу кілька нових постів за ту саму дату (17 жовтня),
+    // надсилається лише найновіший (верхній), а старіші за цю саму дату під ним ігноруються
+    page.html = `
+<html><body>
+<article id="post-1238">
+  <h2>ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ (оновлено 18:43)</h2>
+  <div class="content">
+    <p>5.1: 19:00 - 24:00</p>
+  </div>
+</article>
+<article id="post-1237">
+  <h2>ОНОВЛЕНО ГПВ НА 17 ЖОВТНЯ (оновлено 17:10)</h2>
+  <div class="content">
+    <p>5.1: 17:30 - 19:30</p>
+  </div>
+</article>
+</body></html>`;
+    const multiSameDay = await runCheck(env);
+    expect(multiSameDay.sentTo).toEqual([CHAT_ID]);
+    expect(net.telegramCalls).toHaveLength(4);
+    expect(net.telegramCalls[3]!.text).toContain("оновлено 18:43");
+    expect(net.telegramCalls[3]!.text).toContain("Черга 5.1: 19:00 - 24:00 (було: 17:30 - 19:30)");
   });
 
   it("зміна черги чату: /queue одразу надсилає графік нової черги", async () => {
