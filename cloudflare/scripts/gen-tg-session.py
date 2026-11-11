@@ -24,13 +24,20 @@ async def main() -> None:
     print("=== Генерація TELEGRAM_SESSION для @zoe_alarm ===")
     api_id_str = input("Введіть TELEGRAM_API_ID (з https://my.telegram.org): ").strip()
     api_hash = input("Введіть TELEGRAM_API_HASH: ").strip()
+    bot_token = input("Введіть BOT_TOKEN бота (або Enter для входу за номером телефону): ").strip()
 
-    async with TelegramClient(StringSession(), int(api_id_str), api_hash) as client:
-        session_str = client.session.save()
-        print("\n✅ Успішно! Додайте ці 3 секрети в GitHub Actions Secrets:\n")
-        print(f"TELEGRAM_API_ID   = {api_id_str}")
-        print(f"TELEGRAM_API_HASH = {api_hash}")
-        print(f"TELEGRAM_SESSION  = {session_str}\n")
+    client = TelegramClient(StringSession(), int(api_id_str), api_hash)
+    if bot_token:
+        await client.start(bot_token=bot_token)
+    else:
+        await client.start()
+    session_str = client.session.save()
+    await client.disconnect()
+
+    print("\n✅ Успішно! Додайте ці 3 секрети в GitHub Actions Secrets:\n")
+    print(f"TELEGRAM_API_ID   = {api_id_str}")
+    print(f"TELEGRAM_API_HASH = {api_hash}")
+    print(f"TELEGRAM_SESSION  = {session_str}\n")
 
 
 if __name__ == "__main__":

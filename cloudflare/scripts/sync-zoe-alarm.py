@@ -127,6 +127,14 @@ def parse_xlsx_bytes(data: bytes) -> list[dict[str, str]]:
             cur_end_date = h
         if col_i:
             cur_end_time = col_i
+
+        # Іноді оператор (напр. ЗМЕМ_ПБ) вписує і вулицю, і будинки в колонку C ("вул. Сорочинська  28|28а"), а D лишає порожньою
+        if c and not d:
+            m_inline = re.match(r"^(.+?)\s+(\d[\dа-яіїєґa-zA-Z|/,\s\-]*)$", c)
+            if m_inline:
+                c = m_inline.group(1).strip()
+                d = m_inline.group(2).strip()
+
         if c:
             cur_street = c
 
