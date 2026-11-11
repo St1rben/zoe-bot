@@ -53,11 +53,18 @@ jobs:
             sudo dpkg -i "$DEB_DIR"/*.deb || true
           fi
           if ! command -v tor >/dev/null 2>&1; then
-            echo "Кешу .deb немає — завантажуємо через apt (без security.ubuntu.com)..."
-            sudo sed -i \
-              -e 's|https\?://security\.ubuntu\.com/ubuntu/\?|http://azure.archive.ubuntu.com/ubuntu/|g' \
-              /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true
-            APT_OPTS=(-o Acquire::Retries=2 -o Acquire::http::Timeout=10 -o Acquire::https::Timeout=10)
+            echo "Кешу .deb немає — завантажуємо через ізольований sources.list (mirrors.edge.kernel.org)..."
+            CODENAME=$(. /etc/os-release && echo "$VERSION_CODENAME")
+            TOR_SOURCES="$RUNNER_TEMP/tor-sources.list"
+            echo "deb https://mirrors.edge.kernel.org/ubuntu $CODENAME main universe" > "$TOR_SOURCES"
+            APT_OPTS=(
+              -o Dir::Etc::sourcelist="$TOR_SOURCES"
+              -o Dir::Etc::sourceparts="-"
+              -o APT::Get::List-Cleanup="0"
+              -o Acquire::Retries=2
+              -o Acquire::http::Timeout=10
+              -o Acquire::https::Timeout=10
+            )
             sudo apt-get "${APT_OPTS[@]}" update -qq
             sudo rm -f "$DEB_DIR"/*.deb
             sudo apt-get "${APT_OPTS[@]}" install -y -qq --no-install-recommends \
