@@ -145,8 +145,15 @@ describe("webhook /telegram", () => {
     expect(net.telegramCalls.at(-1)!.text).toContain("не схоже на номер черги");
   });
 
-  it("кнопка qt:4.2 додає чергу та оновлює повідомлення", async () => {
+  it("кнопка qt:4.2 додає чергу, оновлює повідомлення і синхронізує chat_state (фільтруючи сміття з knownQueues)", async () => {
     const net = installNetworkStub({ page: "" });
+    await putMeta(env, {
+      ...emptyMeta(),
+      lastPostId: "post-1234",
+      lastPostTitle: "ГПВ НА 11 ЛИСТОПАДА",
+      lastPostText: "4.2: 10:00 - 12:00\n5.1: 08:00 - 10:00",
+      knownQueues: ["1.1", "06", "11"],
+    });
     const response = await sendCallback("qt:4.2");
     expect(response.status).toBe(200);
 
@@ -159,8 +166,13 @@ describe("webhook /telegram", () => {
     const keyboard = edit!.body.reply_markup as {
       inline_keyboard: { text: string; callback_data: string }[][];
     };
-    const toggle = keyboard.inline_keyboard.flat().find((b) => b.callback_data === "qt:4.2");
+    const buttons = keyboard.inline_keyboard.flat();
+    const toggle = buttons.find((b) => b.callback_data === "qt:4.2");
     expect(toggle?.text).toBe("✅ 4.2");
+    // Сміттєві дати «06» та «11» відфільтровані з кнопок
+    expect(buttons.some((b) => b.callback_data === "qt:06" || b.callback_data === "qt:11")).toBe(
+      false,
+    );
 
     const answer = net.apiCalls.find((call) => call.method === "answerCallbackQuery");
     expect(answer).toBeDefined();
@@ -362,7 +374,7 @@ describe("health", () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { status: string; version: string };
     expect(body.status).toBe("ok");
-    expect(body.version).toBe("1.10.1");
+    expect(body.version).toBe("1.10.2");
   });
 
   it("GET /telegram — 405", async () => {

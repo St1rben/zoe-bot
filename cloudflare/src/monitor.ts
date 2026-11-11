@@ -103,8 +103,13 @@ export function stalePostNote(title: string | null, now: Date, timeZone: string)
   const todayParts = timeInZone(now, timeZone).date.split("-");
   const month = Number(todayParts[1] ?? "0");
   const day = Number(todayParts[2] ?? "0");
+  // Перехід року: 31 грудня → пост на 1 січня (майбутнє) або 1 січня → пост за 31 грудня (минуле)
+  if (postDate.month === 1 && month === 12) return null;
+  const isCrossYearPast = postDate.month === 12 && month === 1;
   // Пост за сьогодні або на майбутню дату — попередження не потрібне.
-  if (postDate.month > month || (postDate.month === month && postDate.day >= day)) return null;
+  if (!isCrossYearPast && (postDate.month > month || (postDate.month === month && postDate.day >= day))) {
+    return null;
+  }
 
   return (
     `⚠️ На ${day} ${monthGenitive(month)} графік для населення не публікували — ` +
@@ -156,6 +161,14 @@ function findPreviousPostState(
   }
 
   return undefined;
+}
+
+/** Чи схожий рядок на реальний номер черги для кнопок вибору (відсікає випадкові дати «06», «11»). */
+export function isPlausibleQueueId(queue: string): boolean {
+  if (/^0\d/.test(queue)) return false;
+  if (queue.includes(".")) return /^\d{1,2}\.\d{1,2}$/.test(queue);
+  const num = Number(queue);
+  return Number.isInteger(num) && num >= 1 && num <= 6;
 }
 
 /** Карта «черга → сценарій» — стан дедуплікації чату. */
@@ -379,10 +392,12 @@ export async function processHtml(
     lastPostText: primary.text,
     updatedAt: now,
     lastPostSig: sigs.get(primary.id) ?? null,
-    knownQueues: sortQueues([
-      ...(meta.knownQueues ?? []),
-      ...consumerPosts.flatMap((post) => Object.keys(post.queues)),
-    ]),
+    knownQueues: sortQueues(
+      [
+        ...(meta.knownQueues ?? []),
+        ...consumerPosts.flatMap((post) => Object.keys(post.queues)),
+      ].filter(isPlausibleQueueId),
+    ),
     recentSigs,
   };
   const digestSent = await sendDigestIfDue(env, primary, new Date(now), meta);

@@ -47,6 +47,12 @@ const TIME_RANGE_RE = /(\d{1,2})[:.](\d{2})\s*(?:[–—−-]|до)\s*(\d{1,2})[
 /** Номер черги в рядку: «5.1», «5,1» або ціла черга «3». */
 const QUEUE_ID_RE = /(\d{1,2}(?:[.,]\d{1,2})?)/g;
 
+/** Допустимий префікс перед номером черги: маркери списку та слово «Черга» / «Підчерга». */
+const QUEUE_PREFIX_BEFORE_RE = /^[\s•*·—–−-]*(?:(?:під)?черг[аи]\s*(?:№\s*)?)?$/i;
+
+/** Допустимий розділювач між номером черги та першим вікном часу («: », « — з » тощо). */
+const QUEUE_PREFIX_AFTER_RE = /^[\s:.;,—–−-]*(?:з|із)?\s*$/i;
+
 /** Максимум черг, які можна відстежувати в одному чаті (сетка ZOE — 12 черг). */
 export const MAX_QUEUES_PER_CHAT = 12;
 
@@ -177,26 +183,45 @@ export function parseQueueLines(text: string): Record<string, string> {
     if (line === "") continue;
 
     const ranges = [...line.matchAll(TIME_RANGE_RE)];
-    if (ranges.length === 0) continue;
+    if (ranges.length === 0) {
+      lastQueue = null;
+      continue;
+    }
 
     const windows = ranges
       .map((match) => normalizeWindow(match))
       .filter((window): window is string => window !== null)
       .join(", ");
-    if (windows === "") continue;
+    if (windows === "") {
+      lastQueue = null;
+      continue;
+    }
 
     const firstIndex = ranges[0]?.index ?? 0;
     const prefix = line.slice(0, firstIndex);
     const idMatches = [...prefix.matchAll(QUEUE_ID_RE)];
-    const lastId = idMatches.at(-1)?.[1];
+    const lastMatch = idMatches.at(-1);
+    const lastId = lastMatch?.[1];
+    const matchIndex = lastMatch?.index ?? 0;
+    const beforeId = lastMatch !== undefined ? prefix.slice(0, matchIndex) : "";
+    const afterId =
+      lastMatch !== undefined ? prefix.slice(matchIndex + lastMatch[0].length) : "";
 
-    if (lastId !== undefined) {
+    const isValidHeader =
+      lastId !== undefined &&
+      !/^0\d/.test(lastId) &&
+      QUEUE_PREFIX_BEFORE_RE.test(beforeId) &&
+      QUEUE_PREFIX_AFTER_RE.test(afterId);
+
+    if (isValidHeader && lastId !== undefined) {
       const queue = normalizeQueueId(lastId);
       if (!(queue in queues)) queues[queue] = windows;
       lastQueue = queue;
     } else if (lastQueue !== null && /^[\d:.,\s–—-]*$/.test(prefix.trim())) {
-      // Рядок-продовження: лише час (можливо з часткою номера), тексту немає
+      // Рядок-продовження: лише час (можливо з комою/тире), тексту немає
       queues[lastQueue] = `${queues[lastQueue] ?? ""}, ${windows}`.replace(/^, /, "");
+    } else {
+      lastQueue = null;
     }
   }
   return queues;

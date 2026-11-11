@@ -19,7 +19,7 @@ import {
   queuePickerKeyboard,
   type QueueScenarioEntry,
 } from "./messages";
-import { postDateKey, scenarioMapFromEntries, stalePostNote } from "./monitor";
+import { isPlausibleQueueId, postDateKey, scenarioMapFromEntries, stalePostNote } from "./monitor";
 import {
   MAX_QUEUES_PER_CHAT,
   scenarioFor,
@@ -140,18 +140,8 @@ async function handleBotMembership(env: Env, event: TelegramChatMemberUpdated): 
   await ensureChat(env, chatId);
 
   // Тихо фіксуємо поточний стан черг без повідомлень у чат
-  const meta = await getMeta(env);
-  const post = postFromMeta(meta);
-  if (post !== null) {
-    const queues = queuesOr(env.QUEUE, await getChatQueues(env, chatId));
-    const entries = queues.map((queue) => [queue, scenarioFor(post, queue)] as const);
-    await putChatState(env, chatId, {
-      posts: {
-        [post.id]: { queues: scenarioMapFromEntries(entries), dateKey: postDateKey(post.title) },
-      },
-      updatedAt: Date.now(),
-    });
-  }
+  const queues = queuesOr(env.QUEUE, await getChatQueues(env, chatId));
+  await syncChatStateForQueues(env, chatId, queues);
 }
 
 async function handleQueue(
@@ -328,6 +318,7 @@ async function handleQueueToggleCallback(
   const normalized = normalizeQueues(next, env.QUEUE);
   await setChatQueues(env, chatId, normalized);
   const nextQueues = queuesOr(env.QUEUE, next);
+  await syncChatStateForQueues(env, chatId, nextQueues);
   const known = await availableQueues(env, nextQueues);
   const entries = await currentScenarioEntries(env, nextQueues);
   const text = formatQueuesMessage({
@@ -368,7 +359,8 @@ async function showQueuePicker(env: Env, chatId: number): Promise<void> {
 /** Усі черги для кнопок: сид ZOE + накопичені з постів + поточні черги чату. */
 async function availableQueues(env: Env, tracked: readonly string[]): Promise<string[]> {
   const meta = await getMeta(env);
-  return sortQueues([...SEED_QUEUES, ...(meta.knownQueues ?? []), ...tracked]);
+  const validKnown = (meta.knownQueues ?? []).filter(isPlausibleQueueId);
+  return sortQueues([...SEED_QUEUES, ...validKnown, ...tracked]);
 }
 
 /** Сценарії для кожної черги з останнього поста (або null, якщо даних ще немає). */
@@ -379,6 +371,38 @@ async function currentScenarioEntries(
   const post = postFromMeta(await getMeta(env));
   if (post === null) return null;
   return queues.map((queue) => [queue, scenarioFor(post, queue)] as const);
+}
+
+/**
+ * Оновлює збережений стан чату під новий набір черг, не затираючи інші
+ * відстежувані пости в історії чату.
+ */
+async function syncChatStateForQueues(
+  env: Env,
+  chatId: number,
+  queues: readonly string[],
+): Promise<void> {
+  const post = postFromMeta(await getMeta(env));
+  if (post === null) return;
+  const previous = await getChatState(env, chatId);
+  const entries: QueueScenarioEntry[] = queues.map((queue) => [
+    queue,
+    scenarioFor(post, queue),
+  ]);
+  const scenarioMap = scenarioMapFromEntries(entries);
+  const dateKey = postDateKey(post.title);
+  const posts = { ...(previous?.posts ?? {}) };
+  posts[post.id] = { queues: scenarioMap, dateKey };
+  // Якщо в історії є старіші пости за ту саму дату — синхронізуємо їх теж,
+  // щоб при наступному інгесті не спрацювала хибна різниця наборів черг.
+  if (dateKey !== null) {
+    for (const [id, state] of Object.entries(posts)) {
+      if (id !== post.id && state.dateKey === dateKey) {
+        posts[id] = { queues: scenarioMap, dateKey };
+      }
+    }
+  }
+  await putChatState(env, chatId, { posts, updatedAt: Date.now() });
 }
 
 /** Надсилає поточний графік для набору черг і фіксує стан чату (дедуплікація). */
@@ -394,12 +418,7 @@ async function sendCurrentSchedule(
     scenarioFor(post, queue),
   ]);
   if (await sendMessage(env, chatId, formatMultiUpdate(post.title, entries))) {
-    await putChatState(env, chatId, {
-      posts: {
-        [post.id]: { queues: scenarioMapFromEntries(entries), dateKey: postDateKey(post.title) },
-      },
-      updatedAt: Date.now(),
-    });
+    await syncChatStateForQueues(env, chatId, queues);
   }
 }
 

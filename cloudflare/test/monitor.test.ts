@@ -459,6 +459,17 @@ describe("stalePostNote", () => {
     expect(stalePostNote(tomorrow, new Date("2026-10-17T18:00:00Z"), "Europe/Kyiv")).toBeNull();
   });
 
+  it("перехід року: 31 грудня → пост на 1 січня без попередження, 1 січня → пост за 31 грудня з попередженням", () => {
+    const jan1Title = "ГПВ НА 1 СІЧНЯ ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ";
+    expect(stalePostNote(jan1Title, new Date("2026-12-31T20:00:00Z"), "Europe/Kyiv")).toBeNull();
+
+    const dec31Title = "ГПВ НА 31 ГРУДНЯ ПО ЗАПОРІЗЬКІЙ ОБЛАСТІ";
+    const note = stalePostNote(dec31Title, new Date("2027-01-01T10:00:00Z"), "Europe/Kyiv");
+    expect(note).not.toBeNull();
+    expect(note).toContain("На 1 січня");
+    expect(note).toContain("дані за 31 грудня");
+  });
+
   it("без заголовка або без дати — без попередження", () => {
     expect(stalePostNote(null, new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv")).toBeNull();
     expect(stalePostNote("ОНОВЛЕНО ГПВ", new Date("2026-10-18T18:00:00Z"), "Europe/Kyiv")).toBeNull();
